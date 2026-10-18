@@ -1,0 +1,17 @@
+# ML Service .gitignore
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.env
+.venv/
+venv/
+*.log
+.DS_Store
+models/
+*.pkl
+*.pt
+*.bin
