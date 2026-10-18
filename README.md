@@ -77,18 +77,85 @@ npm run dev
 
 ### 4. Backend — Node.js + Express
 
-```bash
+```powershell
 cd backend
 npm install
 npm run dev      # uses --watch (Node 22+) for hot-reload
 # → http://localhost:4000
 ```
 
-Health check:
+#### Health check (`GET /health`)
 
-```bash
-curl http://localhost:4000/health
-# {"status":"ok","service":"triageiq-backend","timestamp":"..."}
+```powershell
+Invoke-RestMethod -Uri "http://localhost:4000/health" -Method Get | ConvertTo-Json
+# {"status":"ok","service":"routedesk-backend","timestamp":"..."}
+```
+
+#### Ticket Prediction Forwarding (`POST /api/tickets/predict`)
+
+Forwards ticket classification requests from frontend clients to the FastAPI ML service (`http://127.0.0.1:8000/predict`).
+
+**Startup Instructions for Both Services:**
+Open two terminal windows:
+1. **ML Service Terminal:**
+   ```powershell
+   cd ml-service
+   .\.venv\Scripts\Activate.ps1
+   uvicorn app.main:app --port 8000
+   ```
+2. **Backend Terminal:**
+   ```powershell
+   cd backend
+   npm run dev
+   ```
+
+**Successful Prediction Request (PowerShell):**
+```powershell
+$body = @{
+    subject = "Duplicate charge on monthly subscription"
+    body    = "My credit card was charged twice for invoice #9910. Please refund the extra charge."
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:4000/api/tickets/predict" -Method Post -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 5
+```
+
+Example response (HTTP 200):
+```json
+{
+  "queue": "Billing and Payments",
+  "confidence": 0.756,
+  "probabilities": {
+    "Billing and Payments": 0.756,
+    "Customer Service": 0.0285,
+    "General Inquiry": 0.011,
+    "Human Resources": 0.0225,
+    "IT Support": 0.0402,
+    "Product Support": 0.034,
+    "Returns and Exchanges": 0.0346,
+    "Sales and Pre-Sales": 0.0197,
+    "Service Outages and Maintenance": 0.0188,
+    "Technical Support": 0.0347
+  }
+}
+```
+
+**Invalid Input Handling (HTTP 400):**
+```powershell
+try {
+    Invoke-RestMethod -Uri "http://localhost:4000/api/tickets/predict" -Method Post -ContentType "application/json" -Body '{"subject": "   ", "body": ""}'
+} catch {
+    Write-Output "HTTP Status: $($_.Exception.Response.StatusCode.value__)"
+}
+# Returns HTTP 400 Bad Request if both subject and body lack non-whitespace text.
+```
+
+**ML Service Unavailable Handling (HTTP 503):**
+If the ML service on port 8000 is stopped or unreachable, the Express route gracefully returns:
+```json
+{
+  "error": "ML service is unavailable. Please ensure the ML service is running.",
+  "details": "fetch failed"
+}
 ```
 
 ---
@@ -249,13 +316,15 @@ concurrently \
 
 ---
 
-## Health Endpoints Summary
+## Key Endpoints Summary
 
-| Service | URL | Method |
-|---------|-----|--------|
-| Backend | `http://localhost:4000/health` | GET |
-| ML Service | `http://localhost:8000/health` | GET |
-| ML Service Docs | `http://localhost:8000/docs` | GET |
+| Service | Endpoint | Method | Description |
+|---------|----------|--------|-------------|
+| Backend | `http://localhost:4000/health` | GET | Backend health check |
+| Backend | `http://localhost:4000/api/tickets/predict` | POST | Frontend-facing ticket prediction router (forwards to ML service) |
+| ML Service | `http://localhost:8000/health` | GET | ML service status and model loading state |
+| ML Service | `http://localhost:8000/predict` | POST | Direct ML inference endpoint |
+| ML Service Docs | `http://localhost:8000/docs` | GET | Swagger interactive API docs |
 
 ---
 
