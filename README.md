@@ -64,13 +64,26 @@ cp ml-service/.env.example ml-service/.env
 
 ---
 
-### 3. Frontend — React + Vite
+### 3. Frontend — React + Vite Dashboard
 
-```bash
+The frontend provides an interactive, modern dashboard for submitting support tickets and receiving instant machine-learning routing recommendations.
+
+```powershell
 cd frontend
 npm install
 npm run dev
 # → http://localhost:5173
+```
+
+- **Ticket Classification Form:** Allows entering ticket `subject` and `body` (description) with instant quick-test templates.
+- **Queue Prediction & Confidence:** Connects to the Express backend (`http://localhost:4000/api/tickets/predict`) to classify tickets into 10 target queues with visual confidence metering and ranked alternative queues.
+- **Error & Validation Handling:** Provides immediate client-side validation when inputs are missing and displays clean server error messages if backend/ML services are offline.
+- **ML Transparency Notice:** Features an explicit disclosure that recommendations are ML-generated and subject to human oversight.
+
+To validate the production bundle or run linting:
+```powershell
+npm run lint    # fast linting with oxlint
+npm run build   # build client bundle into dist/
 ```
 
 ---
