@@ -101,25 +101,99 @@ cd ml-service
 # Create and activate virtual environment (first time only)
 python -m venv .venv
 
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
+# Windows PowerShell:
+cd ml-service
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 # → http://localhost:8000
 ```
 
-Health check:
+#### Health check (`GET /health`)
 
-```bash
-curl http://localhost:8000/health
-# {"status":"ok","service":"triageiq-ml-service","timestamp":"..."}
+PowerShell:
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/health" -Method Get | ConvertTo-Json -Depth 5
 ```
 
-Interactive API docs: <http://localhost:8000/docs>
+Example response:
+```json
+{
+  "status": "ok",
+  "service": "routedesk-ml-service",
+  "model_loaded": true,
+  "model_path": "C:\\Users\\Admin\\Desktop\\RouteDesk\\ml-service\\artifacts\\tfidf_lr_pipeline.joblib",
+  "classes_count": 10,
+  "classes": [
+    "Billing and Payments",
+    "Customer Service",
+    "General Inquiry",
+    "Human Resources",
+    "IT Support",
+    "Product Support",
+    "Returns and Exchanges",
+    "Sales and Pre-Sales",
+    "Service Outages and Maintenance",
+    "Technical Support"
+  ],
+  "timestamp": "2026-10-18T16:20:41.698673+00:00"
+}
+```
+
+#### Model Inference (`POST /predict`)
+
+Accepts a JSON payload with `subject` and/or `body`. Returns the predicted `queue`, model `confidence` (0.0 to 1.0), and full class `probabilities`.
+
+**Valid Request:**
+```powershell
+$body = @{
+    subject = "Double charged on my latest invoice"
+    body    = "I was billed twice on my credit card this month. Please refund the extra charge."
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:8000/predict" -Method Post -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 5
+```
+
+Example response (HTTP 200):
+```json
+{
+  "queue": "Billing and Payments",
+  "confidence": 0.9095,
+  "probabilities": {
+    "Billing and Payments": 0.9095,
+    "Customer Service": 0.0106,
+    "General Inquiry": 0.0042,
+    "Human Resources": 0.0075,
+    "IT Support": 0.0145,
+    "Product Support": 0.0134,
+    "Returns and Exchanges": 0.0153,
+    "Sales and Pre-Sales": 0.0064,
+    "Service Outages and Maintenance": 0.007,
+    "Technical Support": 0.0117
+  }
+}
+```
+
+**Single-field Request (Subject or Body only):**
+```powershell
+# Subject only:
+Invoke-RestMethod -Uri "http://localhost:8000/predict" -Method Post -ContentType "application/json" -Body '{"subject": "Cannot connect to office VPN"}' | ConvertTo-Json
+
+# Body only:
+Invoke-RestMethod -Uri "http://localhost:8000/predict" -Method Post -ContentType "application/json" -Body '{"body": "Where do I submit my annual leave request form?"}' | ConvertTo-Json
+```
+
+**Invalid Request (Empty text validation):**
+```powershell
+try {
+    Invoke-RestMethod -Uri "http://localhost:8000/predict" -Method Post -ContentType "application/json" -Body '{"subject": "", "body": ""}'
+} catch {
+    Write-Output "HTTP Status: $($_.Exception.Response.StatusCode.value__)"
+}
+```
+Returns HTTP 422 Unprocessable Entity with a validation message explaining that at least one of `subject` or `body` must be non-empty.
+
+Interactive Swagger API docs: <http://localhost:8000/docs>
 
 ---
 
