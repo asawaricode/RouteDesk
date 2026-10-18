@@ -123,6 +123,40 @@ Interactive API docs: <http://localhost:8000/docs>
 
 ---
 
+### 6. ML Service — Training the Baseline Model
+
+To train the ticket classification baseline (TF-IDF + Logistic Regression on `Tobi-Bueck/customer-support-tickets`), run the following Windows PowerShell commands:
+
+```powershell
+# Navigate to ml-service directory
+cd ml-service
+
+# Activate the virtual environment
+.\.venv\Scripts\Activate.ps1
+
+# Optional troubleshooting: If script activation is blocked by execution policy, run:
+# Set-ExecutionPolicy -Scope Process Bypass
+
+# Install training dependencies
+pip install -r requirements-train.txt
+
+# Run the training and evaluation script
+python train.py
+```
+
+The training process executes:
+1. Loads the `Tobi-Bueck/customer-support-tickets` dataset from Hugging Face.
+2. Filters to English tickets, combines subject and body, and validates queue labels.
+3. Performs duplicate analysis and group-aware stratified train/validation/test splits (no text leakage across splits).
+4. Trains standard and balanced `LogisticRegression` baselines, selecting the best model based on validation macro F1.
+5. Evaluates on the held-out test set and saves artifacts to `ml-service/artifacts/`:
+   - `metrics.json` — Evaluation metrics, class distributions, and environment metadata (tracked in Git).
+   - `classes.json` — Retained target queue classes (tracked in Git).
+   - `confusion_matrix.csv` — Test set confusion matrix (tracked in Git).
+   - `tfidf_lr_pipeline.joblib` — Serialized scikit-learn pipeline (excluded from Git via `.gitignore`).
+
+---
+
 ## Running All Services Simultaneously
 
 Open **three terminal tabs** and run the commands above in each.

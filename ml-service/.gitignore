@@ -1,4 +1,6 @@
 # ML Service .gitignore
+
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -6,12 +8,32 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# Environment
 .env
 .venv/
 venv/
+env/
+
+# Logs
 *.log
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Large model artifacts (do NOT commit large binaries)
+artifacts/*.joblib
+artifacts/*.pkl
+artifacts/*.pt
+artifacts/*.bin
+artifacts/*.onnx
+# ^ keep small results eligible for Git:
+# artifacts/metrics.json, artifacts/classes.json, artifacts/confusion_matrix.csv
+
+# Legacy / old model dirs
 models/
-*.pkl
-*.pt
-*.bin
+
+# Hugging Face dataset cache
+.cache/
+~/.cache/huggingface/

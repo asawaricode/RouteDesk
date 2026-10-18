@@ -40,5 +40,14 @@ Thumbs.db
 .idea/
 .vscode/
 
+# ─── ML artifacts (large model binaries) ──────────────────────────────────
+**/artifacts/*.joblib
+**/artifacts/*.pkl
+**/artifacts/*.pt
+**/artifacts/*.bin
+**/artifacts/*.onnx
+# Keep small metrics, classes, and confusion matrix CSV eligible for git
+
 # ─── Package manager lock files (keep package-lock.json / requirements.txt) ─
 # Intentionally NOT ignoring lock files
+

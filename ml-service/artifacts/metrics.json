@@ -1,0 +1,155 @@
+{
+  "dataset": {
+    "name": "Tobi-Bueck/customer-support-tickets",
+    "revision": "0.0.0",
+    "split_used": "train",
+    "note": "revision is the HF dataset version field (0.0.0), not a Git commit hash"
+  },
+  "data_prep": {
+    "initial_raw_rows": 61765,
+    "rows_after_cleaning": 28261,
+    "classes_retained": [
+      "Billing and Payments",
+      "Customer Service",
+      "General Inquiry",
+      "Human Resources",
+      "IT Support",
+      "Product Support",
+      "Returns and Exchanges",
+      "Sales and Pre-Sales",
+      "Service Outages and Maintenance",
+      "Technical Support"
+    ],
+    "num_classes": 10,
+    "exclusions": [
+      {
+        "reason": "non-English language (lang != 'en')",
+        "rows_dropped": 33504
+      },
+      {
+        "reason": "empty combined text",
+        "rows_dropped": 0
+      },
+      {
+        "reason": "missing/empty queue label",
+        "rows_dropped": 0
+      }
+    ]
+  },
+  "splits": {
+    "strategy": "stratified group split (group=normalized text)",
+    "stratified": true,
+    "random_seed": 42,
+    "train_rows": 19786,
+    "val_rows": 4239,
+    "test_rows": 4236,
+    "train_unique_groups": 16622,
+    "val_unique_groups": 3562,
+    "test_unique_groups": 3563
+  },
+  "model": {
+    "type": "TfidfVectorizer + LogisticRegression (sklearn Pipeline)",
+    "class_weight": "balanced",
+    "C": 1.0,
+    "max_iter": 1000,
+    "solver": "lbfgs",
+    "note": "multinomial handled natively by lbfgs (multi_class removed in sklearn 1.7+)",
+    "ngram_range": [
+      1,
+      2
+    ],
+    "max_features": 50000,
+    "sublinear_tf": true,
+    "min_df": 2,
+    "random_seed": 42
+  },
+  "validation": {
+    "standard_macro_f1": 0.387144,
+    "balanced_macro_f1": 0.504633,
+    "selected_variant": "balanced",
+    "selected_macro_f1": 0.504633
+  },
+  "test_evaluation": {
+    "accuracy": 0.512276,
+    "macro_f1": 0.522256,
+    "majority_baseline_accuracy": 0.285647,
+    "majority_baseline_macro_f1": 0.044436,
+    "majority_class": "Technical Support",
+    "per_class": {
+      "Billing and Payments": {
+        "precision": 0.741627,
+        "recall": 0.729412,
+        "f1-score": 0.735469,
+        "support": 425
+      },
+      "Customer Service": {
+        "precision": 0.453055,
+        "recall": 0.459909,
+        "f1-score": 0.456456,
+        "support": 661
+      },
+      "General Inquiry": {
+        "precision": 0.448718,
+        "recall": 0.555556,
+        "f1-score": 0.496454,
+        "support": 63
+      },
+      "Human Resources": {
+        "precision": 0.542056,
+        "recall": 0.725,
+        "f1-score": 0.620321,
+        "support": 80
+      },
+      "IT Support": {
+        "precision": 0.428325,
+        "recall": 0.496,
+        "f1-score": 0.459685,
+        "support": 500
+      },
+      "Product Support": {
+        "precision": 0.498452,
+        "recall": 0.400498,
+        "f1-score": 0.444138,
+        "support": 804
+      },
+      "Returns and Exchanges": {
+        "precision": 0.4,
+        "recall": 0.504762,
+        "f1-score": 0.446316,
+        "support": 210
+      },
+      "Sales and Pre-Sales": {
+        "precision": 0.337838,
+        "recall": 0.614754,
+        "f1-score": 0.436047,
+        "support": 122
+      },
+      "Service Outages and Maintenance": {
+        "precision": 0.52657,
+        "recall": 0.677019,
+        "f1-score": 0.592391,
+        "support": 161
+      },
+      "Technical Support": {
+        "precision": 0.57814,
+        "recall": 0.498347,
+        "f1-score": 0.535286,
+        "support": 1210
+      }
+    }
+  },
+  "environment": {
+    "python_version": "3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+    "sklearn_version": "1.9.1",
+    "numpy_version": "2.5.4",
+    "pandas_version": "3.0.6",
+    "joblib_version": "1.6.0",
+    "platform": "Windows-11-10.0.26200-SP0"
+  },
+  "inference_dependencies": {
+    "description": "Minimum versions required to load and run the saved pipeline",
+    "scikit-learn": ">=1.9.1",
+    "joblib": ">=1.6.0",
+    "numpy": ">=2.5.4"
+  }
+}
