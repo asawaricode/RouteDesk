@@ -84,16 +84,29 @@ async function checkSemanticDuplicates(subject, body, candidates, threshold = 0.
   }
 }
 
+export const VALID_QUEUES = [
+  "Billing and Payments",
+  "Customer Service",
+  "General Inquiry",
+  "Human Resources",
+  "IT Support",
+  "Product Support",
+  "Returns and Exchanges",
+  "Sales and Pre-Sales",
+  "Service Outages and Maintenance",
+  "Technical Support",
+];
+
 /**
  * GET /api/tickets
  *
- * Retrieves saved tickets from Supabase, ordered newest first.
+ * Retrieves saved tickets from Supabase with their associated feedback records, ordered newest first.
  */
 router.get("/", async (_req, res) => {
   try {
     const { data: tickets, error } = await supabase
       .from("tickets")
-      .select("*")
+      .select("*, ticket_feedback(*)")
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -114,6 +127,185 @@ router.get("/", async (_req, res) => {
 });
 
 /**
+ * Helper to process ticket feedback submission.
+ */
+async function processFeedback(ticketIdParam, reqBody, res) {
+  const ticketId = parseInt(ticketIdParam, 10);
+
+  if (isNaN(ticketId) || ticketId <= 0) {
+    return res.status(400).json({
+      error: "Invalid ticket ID. Must be a positive integer.",
+    });
+  }
+
+  const { is_correct, corrected_queue } = reqBody || {};
+
+  if (typeof is_correct !== "boolean") {
+    return res.status(400).json({
+      error: "Invalid input: 'is_correct' must be a boolean (true or false).",
+    });
+  }
+
+  // 1. Verify that parent ticket exists in public.tickets
+  const { data: ticket, error: ticketError } = await supabase
+    .from("tickets")
+    .select("id, predicted_queue")
+    .eq("id", ticketId)
+    .single();
+
+  if (ticketError || !ticket) {
+    return res.status(404).json({
+      error: `Ticket #${ticketId} not found in database.`,
+      details: ticketError?.message,
+    });
+  }
+
+  // 2. Prevent accidental duplicate feedback for the same ticket
+  const { data: existingFeedback } = await supabase
+    .from("ticket_feedback")
+    .select("id, ticket_id, is_correct, corrected_queue, created_at")
+    .eq("ticket_id", ticketId)
+    .maybeSingle();
+
+  if (existingFeedback) {
+    return res.status(409).json({
+      error: `Feedback has already been submitted for ticket #${ticketId}.`,
+      feedback: existingFeedback,
+    });
+  }
+
+  // 3. Validate corrected_queue consistency
+  let finalCorrectedQueue = null;
+  if (is_correct === true) {
+    finalCorrectedQueue = null;
+  } else {
+    if (!corrected_queue || typeof corrected_queue !== "string" || !corrected_queue.trim()) {
+      return res.status(400).json({
+        error: "When 'is_correct' is false, 'corrected_queue' must be provided.",
+        valid_queues: VALID_QUEUES,
+      });
+    }
+
+    const trimmedQueue = corrected_queue.trim();
+    if (!VALID_QUEUES.includes(trimmedQueue)) {
+      return res.status(400).json({
+        error: `Invalid corrected queue: '${trimmedQueue}'.`,
+        valid_queues: VALID_QUEUES,
+      });
+    }
+    finalCorrectedQueue = trimmedQueue;
+  }
+
+  // 4. Insert feedback into Supabase
+  const { data: newFeedback, error: insertError } = await supabase
+    .from("ticket_feedback")
+    .insert([
+      {
+        ticket_id: ticketId,
+        predicted_queue: ticket.predicted_queue,
+        corrected_queue: finalCorrectedQueue,
+        is_correct,
+      },
+    ])
+    .select()
+    .single();
+
+  if (insertError) {
+    if (insertError.code === "23505") {
+      return res.status(409).json({
+        error: `Feedback has already been submitted for ticket #${ticketId}.`,
+        details: insertError.message,
+      });
+    }
+    if (insertError.code === "23514") {
+      return res.status(400).json({
+        error: "Database constraint violation: corrected_queue must be null if correct, or non-empty if incorrect.",
+        details: insertError.message,
+      });
+    }
+    console.error("[ERROR] Failed to save feedback to Supabase:", insertError.message);
+    return res.status(500).json({
+      error: "Failed to record feedback in database.",
+      details: insertError.message,
+    });
+  }
+
+  return res.status(201).json({
+    message: "Feedback submitted successfully.",
+    feedback: newFeedback,
+  });
+}
+
+/**
+ * POST /api/tickets/:id/feedback
+ *
+ * Records support agent feedback for a ticket's predicted queue.
+ */
+router.post("/:id/feedback", async (req, res) => {
+  try {
+    return await processFeedback(req.params.id, req.body, res);
+  } catch (err) {
+    console.error("[ERROR] Unexpected error in POST /api/tickets/:id/feedback:", err);
+    return res.status(500).json({
+      error: "An unexpected error occurred while saving feedback.",
+    });
+  }
+});
+
+/**
+ * POST /api/tickets/feedback
+ *
+ * Alias endpoint for recording feedback where ticket_id is supplied in the request body.
+ */
+router.post("/feedback", async (req, res) => {
+  try {
+    const ticketId = req.body?.ticket_id;
+    return await processFeedback(ticketId, req.body, res);
+  } catch (err) {
+    console.error("[ERROR] Unexpected error in POST /api/tickets/feedback:", err);
+    return res.status(500).json({
+      error: "An unexpected error occurred while saving feedback.",
+    });
+  }
+});
+
+/**
+ * GET /api/tickets/metrics
+ *
+ * Retrieves model evaluation metrics (accuracy, macro F1, test split evaluation)
+ * from the ML service metrics endpoint.
+ */
+router.get("/metrics", async (_req, res) => {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    const mlResponse = await fetch(`${ML_SERVICE_URL}/metrics`, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!mlResponse.ok) {
+      const errBody = await mlResponse.json().catch(() => ({}));
+      return res.status(mlResponse.status).json({
+        error: "Failed to retrieve metrics from ML service.",
+        details: errBody.detail || errBody,
+      });
+    }
+
+    const data = await mlResponse.json();
+    return res.status(200).json(data);
+  } catch (err) {
+    console.error("[ERROR] Failed to fetch model metrics from ML service:", err.message);
+    return res.status(503).json({
+      error: "ML service metrics endpoint unavailable.",
+      details: err.message,
+    });
+  }
+});
+
+/**
  * POST /api/tickets/duplicates
  *
  * Checks semantic duplicates for an incoming ticket against existing Supabase tickets
@@ -121,7 +313,7 @@ router.get("/", async (_req, res) => {
  */
 router.post("/duplicates", async (req, res) => {
   try {
-    const { subject, body, threshold = 0.55, top_k = 5 } = req.body || {};
+    const { subject, body, threshold = 0.55, top_k = 5, exclude_id } = req.body || {};
 
     const cleanSubject = typeof subject === "string" ? subject.trim() : "";
     const cleanBody = typeof body === "string" ? body.trim() : "";
@@ -132,7 +324,14 @@ router.post("/duplicates", async (req, res) => {
       });
     }
 
-    const candidates = await getCandidateTickets(100);
+    let candidates = await getCandidateTickets(100);
+    if (exclude_id) {
+      const excludeNum = parseInt(exclude_id, 10);
+      if (!isNaN(excludeNum)) {
+        candidates = candidates.filter((c) => c.id !== excludeNum);
+      }
+    }
+
     const result = await checkSemanticDuplicates(
       cleanSubject,
       cleanBody,

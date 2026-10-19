@@ -272,6 +272,24 @@ async def health_check():
     return payload
 
 
+@app.get("/metrics", tags=["Meta"])
+async def get_model_metrics():
+    """Returns saved model evaluation metrics from metrics.json."""
+    if not METRICS_PATH.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evaluation metrics file not found at: {METRICS_PATH}",
+        )
+    try:
+        with open(METRICS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to read metrics artifact: {exc}",
+        )
+
+
 @app.post(
     "/predict",
     response_model=PredictResponse,
