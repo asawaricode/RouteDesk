@@ -1,58 +1,247 @@
-# RouteDesk — Support Ticket Triage System
+# RouteDesk — AI-Powered Support Ticket Triage System
 
-An AI-assisted support ticket triage system built with a modern three-tier
-architecture (React frontend, Node/Express API gateway, Python/FastAPI ML engine, and Supabase PostgreSQL).
+RouteDesk is a full-stack, three-tier software engineering system designed for intelligent support ticket triage. It combines a React frontend, a Node.js/Express API gateway, and a Python/FastAPI machine learning engine backed by Supabase PostgreSQL.
+
+The system automatically classifies incoming support tickets into 10 department queues using a trained classification pipeline, computes dense semantic embeddings to detect potential duplicate inquiries in real time, archives ticket submissions, and provides a structured human-in-the-loop feedback mechanism for triage auditability and model evaluation.
+
+---
+
+## Key Features
+
+- **Automated Queue Classification:** Categorizes tickets into 10 target departments (`Billing and Payments`, `Customer Service`, `General Inquiry`, `Human Resources`, `IT Support`, `Product Support`, `Returns and Exchanges`, `Sales and Pre-Sales`, `Service Outages and Maintenance`, `Technical Support`).
+- **Explainable Predictions & Alternative Queues:** Displays the top-ranked department queue, an estimated confidence percentage, and the next 4 most probable alternative queues to assist human decision-making.
+- **Low-Confidence Warning Flag:** Highlights ambiguous predictions with an operational review flag when model confidence is below 40%, signaling that human verification is recommended.
+- **Semantic Duplicate Detection:** Encodes ticket text using dense sentence embeddings (`all-MiniLM-L6-v2`) and computes cosine similarity against historical tickets in the database. When similarity meets or exceeds the configured 55% threshold, potential duplicates are presented to human agents without altering routing or auto-rejecting.
+- **Persistent Ticket History & Feedback Loop:** Persists tickets in PostgreSQL and provides agents with one-click verification (`✓ Correct`) or departmental reassignment (`✗ Reassign`). Feedback is stored in an audit table with database-level uniqueness and consistency constraints.
+- **Live Service Observability:** Features real-time status indicators in the dashboard header that monitor connectivity to the Express backend, FastAPI ML service, and Supabase database.
+- **Transparent Model Evaluation Metrics:** Dynamically surfaces verified test set metrics (accuracy, macro F1, majority-class baselines) and class confusion characteristics directly in the interface.
+
+---
+
+## Application Screenshots
+
+### 1. Main Dashboard & Ticket Submission
+The primary operational view includes real-time service health indicators, ticket input fields (subject and body), and pre-populated test templates for quick evaluation.
+
+![RouteDesk Dashboard and Ticket Submission Form](docs/screenshots/01-dashboard-submission.png)
+
+### 2. Routing Recommendation & Duplicate Check
+Upon submission, the dashboard displays the predicted queue, confidence rating, low-confidence warning (when applicable), alternative candidate queues, feedback action buttons, and semantic duplicate check results with similarity scores.
+
+![RouteDesk Routing Recommendation and Similar Ticket Check](docs/screenshots/02-routing-and-similarity.png)
+
+### 3. Ticket History & Human Feedback
+The historical log displays all persisted tickets with timestamp, predicted department, confidence pill, and human feedback status (`Correct` or `Reassigned`).
+
+![RouteDesk Ticket History and Feedback](docs/screenshots/03-ticket-history-feedback.png)
+
+### 4. Model Performance & System Architecture
+A dedicated evaluation and architecture panel presents verified model metrics against majority-class baselines alongside an architectural breakdown of the request pipeline.
+
+![RouteDesk Model Performance and Architecture](docs/screenshots/04-model-performance-architecture.png)
+
+---
+
+## How RouteDesk Works
+
+RouteDesk implements a synchronous triage and archival flow coordinated through the Express API gateway:
+
+```
+[ User / Browser ]
+       │
+       │ 1. POST /api/tickets/predict (subject, body)
+       ▼
+[ Node.js / Express Gateway (Port 4000) ]
+       │
+       ├─► 2a. POST /predict ──────────────► [ FastAPI ML Service (Port 8000) ]
+       │       Returns: predicted queue,        (TF-IDF + Logistic Regression)
+       │       confidence, probabilities
+       │
+       ├─► 2b. Fetch historical tickets ───► [ Supabase PostgreSQL ]
+       │       Returns: candidate tickets
+       │
+       ├─► 2c. POST /duplicates ───────────► [ FastAPI ML Service (Port 8000) ]
+       │       Returns: duplicate matches       (Sentence-Transformers all-MiniLM-L6-v2)
+       │       exceeding 0.55 similarity
+       │
+       ├─► 3. INSERT INTO public.tickets ──► [ Supabase PostgreSQL ]
+       │      Persists ticket and prediction
+       ▼
+[ Response to Frontend (Port 5173) ]
+Displays recommendation, alternative queues, duplicate warnings, and updates ticket table.
+       │
+       │ 4. Optional Agent Feedback: POST /api/tickets/:id/feedback
+       ▼
+[ Supabase PostgreSQL (public.ticket_feedback) ]
+Stores human validation or reassignment for auditability.
+```
+
+### Request Flow Stages:
+
+1. **Ticket Submission:** The user enters a ticket subject and description in the React frontend and clicks "Submit & Route". The frontend issues a `POST /api/tickets/predict` request to the Express backend gateway.
+2. **Dual-Stage ML Processing:**
+   - **Queue Classification:** Express forwards the text payload to FastAPI (`POST /predict`), where the serialized `TfidfVectorizer` and `LogisticRegression` pipeline calculates class probabilities across all 10 departments.
+   - **Duplicate Analysis:** Express retrieves existing tickets from the database and forwards them alongside the submitted ticket to FastAPI (`POST /duplicates`). The ML service generates 384-dimensional dense embeddings using `all-MiniLM-L6-v2` and computes pairwise cosine similarity against candidates.
+3. **Database Archival:** Upon receiving predictions and similarity scores, Express writes the ticket record (`subject`, `body`, `predicted_queue`, `confidence`) into `public.tickets` in Supabase PostgreSQL.
+4. **Interactive Dashboard & Feedback:** The frontend receives the unified response and displays the routing recommendation, alternative queues, and duplicate warnings. Support agents can review historical tickets and submit feedback (`POST /api/tickets/:id/feedback`), which is written to `public.ticket_feedback` without modifying the trained model weights.
+
+---
+
+## Technology Stack
+
+| Layer | Component | Version / Tools | Role in RouteDesk |
+|---|---|---|---|
+| **Frontend** | React | 19.x | Component architecture, application state, and form interactions |
+| **Build & Dev** | Vite | 6.x | Fast local development server (port 5173) and production bundling |
+| **Styling** | Vanilla CSS | Custom CSS | Clean, responsive design system with dark modern aesthetic and flexbox/grid layouts |
+| **Icons** | Lucide React | Latest | Functional icons for status, metrics, and actions |
+| **API Gateway** | Node.js / Express | Node 20+, Express 4.x | REST API routing, request validation, orchestration between ML service and database (port 4000) |
+| **Database Client**| `@supabase/supabase-js` | 2.x | Secure server-side PostgreSQL queries and connection management |
+| **ML Inference** | FastAPI / Uvicorn | FastAPI 0.115+, Uvicorn 0.34+ | Asynchronous REST endpoints for classification, embeddings, and metrics (port 8000) |
+| **Text Classifier** | Scikit-Learn | 1.6+ | TF-IDF feature extraction and multinomial Logistic Regression pipeline |
+| **Semantic Embeddings** | Sentence-Transformers | 3.4+ (`all-MiniLM-L6-v2`) | Dense vector embeddings and cosine similarity calculation for duplicate detection |
+| **Database** | PostgreSQL | Supabase Cloud | Managed relational database hosting `public.tickets` and `public.ticket_feedback` tables |
+
+---
+
+## Machine-Learning Approach and Duplicate-Ticket Detection
+
+### 1. Queue Classification Pipeline
+
+The classification model is implemented as a Scikit-Learn `Pipeline` serialized in `ml-service/artifacts/tfidf_lr_pipeline.joblib`:
+- **Text Vectorization:** `TfidfVectorizer` configured with sublinear term-frequency scaling (`sublinear_tf=True`), document frequency filtering (`min_df=3`, `max_df=0.9`), and unigram plus bigram extraction (`ngram_range=(1, 2)`).
+- **Classifier:** `LogisticRegression` with balanced class weights (`class_weight='balanced'`) to handle class imbalance, regularization parameter `C=1.0`, and `max_iter=1000`.
+- **Target Taxonomy:** 10 customer support categories defined statically in `ml-service/artifacts/classes.json`.
+- **Input Flexibility:** Accepts combined `subject` and `body` text, or either field individually.
+
+### 2. Semantic Duplicate Detection
+
+Duplicate detection operates independently from queue classification:
+- **Embedding Model:** `sentence-transformers/all-MiniLM-L6-v2`, mapping ticket text into 384-dimensional dense vector space.
+- **Similarity Metric:** Pairwise cosine similarity between the incoming ticket embedding and candidate embeddings from existing database records.
+- **Configured Threshold:** `0.55` (55% similarity cutoff). Tickets matching or exceeding this score are flagged as potential duplicates.
+- **Human Decision Support:** Similar-ticket detection provides suggestions for human review. RouteDesk does not automatically reject, alter, or merge tickets.
+
+### 3. Model Confidence Interpretation
+
+- Confidence values reflect normalized softmax outputs across learned n-gram features.
+- **Model confidence is not a calibrated Bayesian probability.** It should not be interpreted as the exact probability that a prediction is objectively correct.
+- An operational heuristic is applied in the interface: predictions with confidence below 40% are highlighted with a "Review Recommended" warning to prioritize manual verification.
+
+---
+
+## Model Evaluation Results
+
+Model performance was evaluated on a held-out test split of the `Tobi-Bueck/customer-support-tickets` dataset. Data partitioning was executed using a stratified group split grouped by normalized ticket text (`ticket_text_norm`), guaranteeing zero duplicate text leakage across splits.
+
+### Dataset Partitioning
+
+| Partition | Ticket Count | Percentage |
+|---|---|---|
+| **Training Set** | 19,786 | 70.0% |
+| **Validation Set** | 4,241 | 15.0% |
+| **Test Set (Held-Out)** | 4,236 | 15.0% |
+| **Total Corpus** | **28,263** | 100.0% |
+
+### Test Set Performance vs. Majority Baseline
+
+Evaluation metrics are loaded directly from the saved training artifact (`ml-service/artifacts/metrics.json`):
+
+| Evaluation Metric | RouteDesk Model (Logistic Regression) | Majority-Class Baseline | Absolute Improvement |
+|---|---|---|---|
+| **Test Accuracy** | **51.2%** (`0.512276`) | 28.6% (`0.285647`) | **+22.7 percentage points** |
+| **Macro F1 Score** | **52.2%** (`0.522256`) | 4.4% (`0.044436`) | **+47.8 percentage points** |
+| **Weighted F1 Score** | **51.3%** (`0.512534`) | 12.7% (`0.127263`) | **+38.5 percentage points** |
+
+### Per-Class Performance Summary
+
+| Support Queue | Test Samples | Precision | Recall | F1 Score |
+|---|---|---|---|---|
+| **Billing and Payments** | 1,209 | 0.691 | 0.785 | **0.735** |
+| **Customer Service** | 185 | 0.448 | 0.465 | 0.456 |
+| **General Inquiry** | 163 | 0.435 | 0.509 | 0.469 |
+| **Human Resources** | 321 | 0.655 | 0.688 | **0.672** |
+| **IT Support** | 563 | 0.439 | 0.451 | 0.445 |
+| **Product Support** | 473 | 0.395 | 0.442 | 0.417 |
+| **Returns and Exchanges** | 403 | 0.638 | 0.591 | **0.613** |
+| **Sales and Pre-Sales** | 204 | 0.478 | 0.490 | 0.484 |
+| **Service Outages and Maintenance** | 208 | 0.536 | 0.481 | 0.507 |
+| **Technical Support** | 507 | 0.407 | 0.448 | 0.427 |
+
+*Note: Evaluation results reflect the characteristics of the synthetic benchmark corpus and serve as a comparative baseline rather than a guarantee of real-world production accuracy.*
+
+---
 
 ## Project Structure
 
 ```
 RouteDesk/
-├── frontend/          # React + Vite (port 5173)
+├── frontend/                     # React + Vite application (Port 5173)
 │   ├── src/
-│   ├── public/
-│   ├── .env.example
-│   └── package.json
+│   │   ├── App.jsx               # Main dashboard component and state management
+│   │   ├── App.css               # Core dashboard stylesheet and design system
+│   │   ├── index.css             # Base reset and typography styles
+│   │   └── main.jsx              # Application entry point
+│   ├── .env.example              # Frontend environment template
+│   └── package.json              # Frontend dependencies and scripts
 │
-├── backend/           # Node.js + Express API (port 4000)
+├── backend/                      # Node.js + Express API gateway (Port 4000)
 │   ├── src/
-│   │   ├── index.js
-│   │   ├── supabase.js
+│   │   ├── index.js              # Express app initialization, CORS, and middleware
+│   │   ├── supabase.js           # Supabase client instantiation
 │   │   └── routes/
-│   │       └── tickets.js
-│   ├── .env.example
-│   └── package.json
+│   │       └── tickets.js        # Ticket predict, duplicate, history, and feedback routes
+│   ├── test_feedback.js          # Feedback route automated test script
+│   ├── .env.example              # Backend environment template
+│   └── package.json              # Backend dependencies and scripts
 │
-└── ml-service/        # Python + FastAPI ML engine (port 8000)
-    ├── app/
-    │   ├── __init__.py
-    │   └── main.py
-    ├── .venv/         # not committed
-    ├── .env.example
-    └── requirements.txt
+├── ml-service/                   # Python + FastAPI ML inference service (Port 8000)
+│   ├── app/
+│   │   ├── __init__.py
+│   │   └── main.py               # FastAPI app, endpoints (/health, /predict, /duplicates, /metrics)
+│   ├── artifacts/
+│   │   ├── metrics.json          # Frozen test set evaluation metrics
+│   │   ├── classes.json          # 10 target department labels
+│   │   ├── confusion_matrix.csv  # Confusion matrix data from model evaluation
+│   │   └── tfidf_lr_pipeline.joblib # Serialized scikit-learn pipeline (local artifact)
+│   ├── test_api.py               # Comprehensive ML API endpoint test suite
+│   ├── test_duplicates.py        # Semantic duplicate detection test suite
+│   ├── train.py                  # Model training and artifact generation script
+│   ├── requirements.txt          # Inference runtime dependencies
+│   ├── requirements-train.txt    # Training pipeline dependencies
+│   └── .env.example              # ML service environment template
+│
+└── docs/
+    └── screenshots/              # Application screenshots for documentation
+        ├── 01-dashboard-submission.png
+        ├── 02-routing-and-similarity.png
+        ├── 03-ticket-history-feedback.png
+        └── 04-model-performance-architecture.png
 ```
 
 ---
 
 ## Prerequisites
 
-| Tool | Minimum version |
-|------|----------------|
-| Node.js | 20 |
-| npm | 9 |
-| Python | 3.11 |
+Before setting up RouteDesk, verify that your environment has the following software installed:
+
+- **Node.js:** `v20.0.0` or higher
+- **npm:** `v9.0.0` or higher
+- **Python:** `v3.11.0` or higher
+- **Supabase Account:** Access to a Supabase project or a local PostgreSQL instance
 
 ---
 
-## Quick Start
+## Setup and Installation
 
-### 1. Clone & enter the repo
+### 1. Clone Repository & Prepare Environments
 
 ```bash
-git clone <repo-url>
-cd TriageIQ
+git clone <repository-url>
+cd RouteDesk
 ```
 
-### 2. Copy environment files
+Create `.env` configuration files from their respective templates:
 
 ```bash
 # Frontend
@@ -61,518 +250,200 @@ cp frontend/.env.example frontend/.env
 # Backend
 cp backend/.env.example backend/.env
 
-# ML service
+# ML Service
 cp ml-service/.env.example ml-service/.env
 ```
 
----
+### 2. Frontend Setup
 
-### 3. Frontend — React + Vite Dashboard
-
-The frontend provides an interactive, modern dashboard for submitting support tickets and receiving instant machine-learning routing recommendations.
-
-```powershell
+```bash
 cd frontend
 npm install
-npm run dev
-# → http://localhost:5173
+cd ..
 ```
 
-- **Ticket Classification Form:** Allows entering ticket `subject` and `body` (description) with instant quick-test templates.
-- **Queue Prediction & Explainable Confidence:** Connects to the Express backend (`http://localhost:4000/api/tickets/predict`) to classify tickets into 10 target queues with visual confidence metering and ranked alternative queues. Includes explicit explainability guidance: confidence represents the model's estimated probability across lexical n-grams, not an infallible accuracy guarantee.
-- **Model Performance & Evaluation Section:** Dynamically reads verified test set metrics from `GET /api/tickets/metrics` (51.2% Test Accuracy, 52.2% Macro F1 vs 28.6% and 4.4% majority baselines). Includes an honest evaluation report highlighting model limitations and lexical confusions (e.g. Technical Support vs IT Support vs Product Support).
-- **Semantic Duplicate Detection:** Powered by `all-MiniLM-L6-v2` embeddings, automatically compares submitted tickets against all archived Supabase tickets in real-time, flagging potential duplicates with similarity scores while keeping duplicate detection strictly independent from queue routing (no automatic queue alteration or rejection).
-- **Ticket History & Triage Feedback Dashboard:** Automatically retrieves persisted tickets from `GET /api/tickets` upon load, displaying ticket IDs, timestamps, subject/body previews, queue badges, and confidence metrics. Support agents can confirm routing accuracy (`✓ Correct`) or reassign tickets (`✗ Reassign`) to collect human evaluation metrics stored in `public.ticket_feedback` without altering the ML model. Prevents accidental duplicate submissions via inline status locks.
-- **Error & Validation Handling:** Provides immediate client-side validation when inputs are missing and displays clean server error messages if backend/ML services or database are offline.
-- **ML Transparency Notice:** Features an explicit disclosure that recommendations are ML-generated and subject to human oversight.
+### 3. Backend Setup
 
-To validate the production bundle or run linting:
-```powershell
-npm run lint    # fast linting with oxlint
-npm run build   # build client bundle into dist/
-```
-
----
-
-### 4. Backend — Node.js + Express + Supabase
-
-```powershell
+```bash
 cd backend
 npm install
-npm run dev      # uses --watch (Node 22+) for hot-reload
-# → http://localhost:4000
+cd ..
 ```
 
-#### Supabase Database Setup & Permissions
-
-The backend integrates with Supabase PostgreSQL using `@supabase/supabase-js`.
-
-1. **Tickets Table Schema (`public.tickets`):**
-   ```sql
-   CREATE TABLE IF NOT EXISTS public.tickets (
-     id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-     subject TEXT DEFAULT '',
-     body TEXT DEFAULT '',
-     predicted_queue TEXT NOT NULL,
-     confidence DOUBLE PRECISION NOT NULL,
-     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-   );
-   ```
-
-2. **Ticket Feedback Table Schema (`public.ticket_feedback` — Step 9):**
-   ```sql
-   CREATE TABLE IF NOT EXISTS public.ticket_feedback (
-     id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-     ticket_id BIGINT NOT NULL REFERENCES public.tickets(id) ON DELETE CASCADE,
-     predicted_queue TEXT NOT NULL,
-     corrected_queue TEXT,
-     is_correct BOOLEAN NOT NULL,
-     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-
-     -- Allow at most one feedback record per ticket
-     CONSTRAINT unique_ticket_feedback UNIQUE (ticket_id),
-
-     -- Enforce queue consistency:
-     -- When correct -> corrected_queue must be NULL
-     -- When incorrect -> corrected_queue must be non-empty
-     CONSTRAINT check_corrected_queue_consistency CHECK (
-       (is_correct = TRUE AND corrected_queue IS NULL)
-       OR
-       (is_correct = FALSE AND corrected_queue IS NOT NULL AND length(trim(corrected_queue)) > 0)
-     )
-   );
-
-   CREATE INDEX IF NOT EXISTS idx_ticket_feedback_ticket_id 
-     ON public.ticket_feedback (ticket_id);
-   ```
-
-3. **Granting Service Role Privileges (Required):**
-   In the Supabase SQL Editor, grant the `service_role` permissions:
-   ```sql
-   GRANT ALL ON TABLE public.tickets TO service_role;
-   GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
-
-   -- Scoped grants for ticket_feedback and its identity sequence only
-   GRANT ALL ON TABLE public.ticket_feedback TO service_role;
-   GRANT USAGE, SELECT ON SEQUENCE public.ticket_feedback_id_seq TO service_role;
-   ```
-
-3. **Backend Environment Variables (`backend/.env`):**
-   ```env
-   PORT=4000
-   ML_SERVICE_URL=http://127.0.0.1:8000
-   NODE_ENV=development
-   SUPABASE_URL=https://<your-project-ref>.supabase.co
-   SUPABASE_SECRET_KEY=<your-service-role-secret-key>
-   ```
-
-> [!IMPORTANT]
-> **Security Architecture:** The `SUPABASE_SECRET_KEY` holds administrative privileges and bypasses Row Level Security (RLS). It is restricted exclusively to the Express backend (`backend/src/supabase.js`) and is **never** shared with the frontend, printed in logs, or exposed in API responses. `.env` files are ignored in Git.
-
-#### Health check (`GET /health`)
-
-```powershell
-Invoke-RestMethod -Uri "http://localhost:4000/health" -Method Get | ConvertTo-Json
-# {"status":"ok","service":"routedesk-backend","timestamp":"..."}
-```
-
-#### Ticket Prediction & Archival (`POST /api/tickets/predict`)
-
-Forwards ticket classification requests to the FastAPI ML service (`http://127.0.0.1:8000/predict`). After a successful prediction, it archives `subject`, `body`, `predicted_queue`, and `confidence` into `public.tickets` in Supabase.
-
-**Startup Instructions for Both Services:**
-Open two terminal windows:
-1. **ML Service Terminal:**
-   ```powershell
-   cd ml-service
-   .\.venv\Scripts\Activate.ps1
-   uvicorn app.main:app --port 8000
-   ```
-2. **Backend Terminal:**
-   ```powershell
-   cd backend
-   npm run dev
-   ```
-
-**Successful Prediction & Archival Request (PowerShell):**
-```powershell
-$body = @{
-    subject = "Duplicate charge on monthly subscription"
-    body    = "My credit card was charged twice for invoice #9910. Please refund the extra charge."
-} | ConvertTo-Json
-
-Invoke-RestMethod -Uri "http://localhost:4000/api/tickets/predict" -Method Post -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 5
-```
-
-Example response (HTTP 200):
-```json
-{
-  "queue": "Billing and Payments",
-  "confidence": 0.756,
-  "probabilities": {
-    "Billing and Payments": 0.756,
-    "Customer Service": 0.0285,
-    "General Inquiry": 0.011,
-    "Human Resources": 0.0225,
-    "IT Support": 0.0402,
-    "Product Support": 0.034,
-    "Returns and Exchanges": 0.0346,
-    "Sales and Pre-Sales": 0.0197,
-    "Service Outages and Maintenance": 0.0188,
-    "Technical Support": 0.0347
-  },
-  "ticket": {
-    "id": 1,
-    "subject": "Duplicate charge on monthly subscription",
-    "body": "My credit card was charged twice for invoice #9910. Please refund the extra charge.",
-    "predicted_queue": "Billing and Payments",
-    "confidence": 0.756,
-    "created_at": "2026-10-19T03:45:12.345Z"
-  },
-  "duplicate_detection": {
-    "has_duplicates": false,
-    "threshold": 0.55,
-    "candidate_count": 0,
-    "duplicates": []
-  }
-}
-```
-
-#### Ticket Duplicate Check (`POST /api/tickets/duplicates`)
-
-Evaluates semantic similarity of an incoming ticket against saved tickets in Supabase without saving or modifying database records.
-
-**Request (PowerShell):**
-```powershell
-$body = @{
-    subject = "Cannot reset my account password"
-    body    = "Locked out of my portal and reset link expired."
-    threshold = 0.55
-} | ConvertTo-Json
-
-Invoke-RestMethod -Uri "http://localhost:4000/api/tickets/duplicates" -Method Post -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 5
-```
-
-Example response (HTTP 200):
-```json
-{
-  "has_duplicates": true,
-  "threshold": 0.55,
-  "candidate_count": 2,
-  "duplicates": [
-    {
-      "id": 1,
-      "subject": "Unable to reset password",
-      "body": "I cannot log into my account after requesting a password reset.",
-      "predicted_queue": "Billing and Payments",
-      "confidence": 0.2779,
-      "created_at": "2026-10-19T04:16:25.783Z",
-      "similarity_score": 0.8887
-    }
-  ]
-}
-```
-
-#### Ticket History Retrieval (`GET /api/tickets`)
-
-Retrieves all saved tickets from Supabase, ordered newest first (`created_at DESC`).
-
-**Request (PowerShell):**
-```powershell
-Invoke-RestMethod -Uri "http://localhost:4000/api/tickets" -Method Get | ConvertTo-Json -Depth 5
-```
-
-Example response (HTTP 200):
-```json
-[
-  {
-    "id": 1,
-    "subject": "Duplicate charge on monthly subscription",
-    "body": "My credit card was charged twice for invoice #9910. Please refund the extra charge.",
-    "predicted_queue": "Billing and Payments",
-    "confidence": 0.756,
-    "created_at": "2026-10-19T03:45:12.345Z",
-    "ticket_feedback": {
-      "id": 1,
-      "ticket_id": 1,
-      "predicted_queue": "Billing and Payments",
-      "corrected_queue": null,
-      "is_correct": true,
-      "created_at": "2026-10-19T05:50:10.493Z"
-    }
-  }
-]
-```
-
-#### Ticket Prediction Feedback (`POST /api/tickets/:id/feedback` or `POST /api/tickets/feedback`)
-
-Allows support agents to verify whether an ML routing prediction was accurate or reassign the ticket to the correct department.
-- Records feedback in `public.ticket_feedback` linked to the ticket (`ON DELETE CASCADE`).
-- Enforces database constraint: when `is_correct = true`, `corrected_queue` must be `null`; when `is_correct = false`, `corrected_queue` must be a valid queue.
-- Prevents accidental duplicate submissions: returns HTTP 409 Conflict if feedback has already been submitted for the ticket.
-- **Model Isolation:** Feedback is stored exclusively for audit and future evaluation. It does not alter existing ticket records or automatically retrain the ML model.
-
-**Valid Request — Confirm Prediction (PowerShell):**
-```powershell
-$body = @{
-    is_correct = $true
-} | ConvertTo-Json
-
-Invoke-RestMethod -Uri "http://localhost:4000/api/tickets/1/feedback" -Method Post -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 5
-```
-
-**Valid Request — Reassign to Correct Department (PowerShell):**
-```powershell
-$body = @{
-    is_correct      = $false
-    corrected_queue = "Technical Support"
-} | ConvertTo-Json
-
-Invoke-RestMethod -Uri "http://localhost:4000/api/tickets/1/feedback" -Method Post -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 5
-```
-
-Example response (HTTP 201 Created):
-```json
-{
-  "message": "Feedback submitted successfully.",
-  "feedback": {
-    "id": 2,
-    "ticket_id": 1,
-    "predicted_queue": "Billing and Payments",
-    "corrected_queue": "Technical Support",
-    "is_correct": false,
-    "created_at": "2026-10-19T06:12:00.000Z"
-  }
-}
-```
-
-**Duplicate Submission Response (HTTP 409 Conflict):**
-```json
-{
-  "error": "Feedback has already been submitted for ticket #1.",
-  "feedback": {
-    "id": 2,
-    "ticket_id": 1,
-    "is_correct": false,
-    "corrected_queue": "Technical Support",
-    "created_at": "2026-10-19T06:12:00.000Z"
-  }
-}
-```
-
-**Invalid Input Handling (HTTP 400):**
-```powershell
-try {
-    Invoke-RestMethod -Uri "http://localhost:4000/api/tickets/predict" -Method Post -ContentType "application/json" -Body '{"subject": "   ", "body": ""}'
-} catch {
-    Write-Output "HTTP Status: $($_.Exception.Response.StatusCode.value__)"
-}
-# Returns HTTP 400 Bad Request if both subject and body lack non-whitespace text.
-```
-
-**ML Service Unavailable Handling (HTTP 503):**
-If the ML service on port 8000 is stopped or unreachable, the Express route returns:
-```json
-{
-  "error": "ML service is unavailable. Please ensure the ML service is running.",
-  "details": "fetch failed"
-}
-```
-
-#### Model Metrics Retrieval (`GET /api/tickets/metrics`)
-
-Proxies model evaluation metrics directly from the ML service, enabling the frontend dashboard to display verified test accuracy, macro F1, baseline comparisons, and per-class performance without hardcoded values.
-
-**Request (PowerShell):**
-```powershell
-Invoke-RestMethod -Uri "http://localhost:4000/api/tickets/metrics" -Method Get | ConvertTo-Json -Depth 5
-```
-
-Example response (HTTP 200):
-```json
-{
-  "test_accuracy": 0.512276,
-  "test_macro_f1": 0.522256,
-  "test_weighted_f1": 0.512534,
-  "baseline_majority_accuracy": 0.285647,
-  "baseline_majority_macro_f1": 0.044436,
-  "dataset": {
-    "num_train": 19786,
-    "num_val": 4241,
-    "num_test": 4236,
-    "num_classes": 10
-  },
-  "best_model": {
-    "name": "LogisticRegression_balanced",
-    "params": {
-      "C": 1.0,
-      "class_weight": "balanced",
-      "max_iter": 1000
-    }
-  }
-}
-```
-
----
-
-### 5. ML Service — Python + FastAPI
+### 4. ML Service Setup
 
 ```bash
 cd ml-service
 
-# Create and activate virtual environment (first time only)
+# Create and activate Python virtual environment
 python -m venv .venv
 
-# Windows PowerShell:
+# On Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
+
+# On Linux / macOS:
+# source .venv/bin/activate
+
+# Install runtime dependencies
+pip install -r requirements.txt
+cd ..
+```
+
+---
+
+## Required Environment Variables
+
+Configuration settings are read from `.env` files located in each service directory. Use variable names from `.env.example`:
+
+### Frontend (`frontend/.env`)
+
+| Variable Name | Required | Default Value | Description |
+|---|---|---|---|
+| `VITE_BACKEND_URL` | Yes | `http://localhost:4000` | Base URL of the Express backend API. |
+
+### Backend (`backend/.env`)
+
+| Variable Name | Required | Default Value | Description |
+|---|---|---|---|
+| `PORT` | Yes | `4000` | Port on which the Express server listens. |
+| `ML_SERVICE_URL` | Yes | `http://127.0.0.1:8000` | Base URL of the FastAPI machine learning service. |
+| `NODE_ENV` | Yes | `development` | Node environment (`development` or `production`). |
+| `SUPABASE_URL` | Yes | *Supplied by user* | HTTPS project URL from your Supabase Project Settings. |
+| `SUPABASE_SECRET_KEY` | Yes | *Supplied by user* | Supabase Service Role Secret Key (used only server-side to access database tables). |
+
+> **Security Note:** `SUPABASE_SECRET_KEY` has administrative access and is kept exclusively within `backend/.env`. It is never bundled into frontend assets or exposed over client-facing endpoints.
+
+### ML Service (`ml-service/.env`)
+
+| Variable Name | Required | Default Value | Description |
+|---|---|---|---|
+| `PORT` | No | `8000` | Port on which FastAPI / Uvicorn runs. |
+| `HOST` | No | `0.0.0.0` | Host IP binding. |
+| `MODEL_PATH` | No | `artifacts/tfidf_lr_pipeline.joblib` | Relative or absolute path to the saved pipeline artifact. |
+| `SIMILARITY_THRESHOLD` | No | `0.55` | Default cosine similarity threshold for duplicate detection. |
+| `EMBEDDING_MODEL_NAME` | No | `all-MiniLM-L6-v2` | Sentence-transformers model name or local path. |
+
+---
+
+## Database Setup
+
+RouteDesk uses two relational tables in the `public` schema of Supabase PostgreSQL. Execute the following SQL statements in the Supabase SQL Editor:
+
+```sql
+-- 1. Create tickets table
+CREATE TABLE IF NOT EXISTS public.tickets (
+  id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  subject TEXT DEFAULT '',
+  body TEXT DEFAULT '',
+  predicted_queue TEXT NOT NULL,
+  confidence DOUBLE PRECISION NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 2. Create ticket feedback audit table
+CREATE TABLE IF NOT EXISTS public.ticket_feedback (
+  id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  ticket_id BIGINT NOT NULL REFERENCES public.tickets(id) ON DELETE CASCADE,
+  predicted_queue TEXT NOT NULL,
+  corrected_queue TEXT,
+  is_correct BOOLEAN NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+  -- Enforce at most one feedback entry per ticket
+  CONSTRAINT unique_ticket_feedback UNIQUE (ticket_id),
+
+  -- Validate consistency:
+  -- If correct: corrected_queue must be NULL
+  -- If incorrect: corrected_queue must contain the reassigned department name
+  CONSTRAINT check_corrected_queue_consistency CHECK (
+    (is_correct = TRUE AND corrected_queue IS NULL)
+    OR
+    (is_correct = FALSE AND corrected_queue IS NOT NULL AND length(trim(corrected_queue)) > 0)
+  )
+);
+
+-- 3. Create index for fast foreign-key lookups
+CREATE INDEX IF NOT EXISTS idx_ticket_feedback_ticket_id 
+  ON public.ticket_feedback (ticket_id);
+
+-- 4. Grant table and sequence permissions to the service_role
+GRANT ALL ON TABLE public.tickets TO service_role;
+GRANT ALL ON TABLE public.ticket_feedback TO service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
+```
+
+---
+
+## Running the Application Locally
+
+Run each service in a separate terminal window:
+
+### Terminal 1: ML Service (Port 8000)
+
+```powershell
 cd ml-service
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-# → http://localhost:8000
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+- Health Check: `http://localhost:8000/health`
+- Interactive Swagger Documentation: `http://localhost:8000/docs`
 
-#### Health check (`GET /health`)
+### Terminal 2: Backend API Gateway (Port 4000)
 
-PowerShell:
 ```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/health" -Method Get | ConvertTo-Json -Depth 5
+cd backend
+npm run dev
 ```
+- Health Check: `http://localhost:4000/health`
 
-Example response:
-```json
-{
-  "status": "ok",
-  "service": "routedesk-ml-service",
-  "model_loaded": true,
-  "model_path": "C:\\Users\\Admin\\Desktop\\RouteDesk\\ml-service\\artifacts\\tfidf_lr_pipeline.joblib",
-  "classes_count": 10,
-  "classes": [
-    "Billing and Payments",
-    "Customer Service",
-    "General Inquiry",
-    "Human Resources",
-    "IT Support",
-    "Product Support",
-    "Returns and Exchanges",
-    "Sales and Pre-Sales",
-    "Service Outages and Maintenance",
-    "Technical Support"
-  ],
-  "timestamp": "2026-10-18T16:20:41.698673+00:00"
-}
-```
+### Terminal 3: Frontend Dashboard (Port 5173)
 
-#### Model Inference (`POST /predict`)
-
-Accepts a JSON payload with `subject` and/or `body`. Returns the predicted `queue`, model `confidence` (0.0 to 1.0), and full class `probabilities`.
-
-**Valid Request:**
 ```powershell
-$body = @{
-    subject = "Double charged on my latest invoice"
-    body    = "I was billed twice on my credit card this month. Please refund the extra charge."
-} | ConvertTo-Json
-
-Invoke-RestMethod -Uri "http://localhost:8000/predict" -Method Post -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 5
+cd frontend
+npm run dev
 ```
+- Web Application: `http://localhost:5173`
 
-Example response (HTTP 200):
-```json
-{
-  "queue": "Billing and Payments",
-  "confidence": 0.9095,
-  "probabilities": {
-    "Billing and Payments": 0.9095,
-    "Customer Service": 0.0106,
-    "General Inquiry": 0.0042,
-    "Human Resources": 0.0075,
-    "IT Support": 0.0145,
-    "Product Support": 0.0134,
-    "Returns and Exchanges": 0.0153,
-    "Sales and Pre-Sales": 0.0064,
-    "Service Outages and Maintenance": 0.007,
-    "Technical Support": 0.0117
-  }
-}
-```
+---
 
-**Single-field Request (Subject or Body only):**
+## Available Tests and Commands
+
+The following test and verification commands are implemented and verified in the repository:
+
+### 1. Frontend Quality Checks
+
 ```powershell
-# Subject only:
-Invoke-RestMethod -Uri "http://localhost:8000/predict" -Method Post -ContentType "application/json" -Body '{"subject": "Cannot connect to office VPN"}' | ConvertTo-Json
+cd frontend
 
-# Body only:
-Invoke-RestMethod -Uri "http://localhost:8000/predict" -Method Post -ContentType "application/json" -Body '{"body": "Where do I submit my annual leave request form?"}' | ConvertTo-Json
+# Run linter (oxlint)
+npm run lint
+
+# Verify production bundle build
+npm run build
 ```
 
-**Invalid Request (Empty text validation):**
+### 2. Backend Feedback Route Tests
+
+Validates ticket feedback submission, duplicate constraint handling (HTTP 409), input validation (HTTP 400), and consistency rules against the backend:
+
 ```powershell
-try {
-    Invoke-RestMethod -Uri "http://localhost:8000/predict" -Method Post -ContentType "application/json" -Body '{"subject": "", "body": ""}'
-} catch {
-    Write-Output "HTTP Status: $($_.Exception.Response.StatusCode.value__)"
-}
+cd backend
+node test_feedback.js
 ```
-Returns HTTP 422 Unprocessable Entity with a validation message explaining that at least one of `subject` or `body` must be non-empty.
 
-Interactive Swagger API docs: <http://localhost:8000/docs>
+### 3. ML Service API Test Suite
 
-#### Semantic Duplicate Detection (`POST /duplicates`)
+Executes automated checks against the FastAPI endpoints covering health reporting, text validation, single-field inputs, and probability distribution formatting:
 
-Compares incoming ticket `subject` and/or `body` against historical candidate tickets using dense sentence embeddings (`all-MiniLM-L6-v2`) and cosine similarity.
-
-**Request (PowerShell):**
 ```powershell
-$body = @{
-    subject = "Cannot reset my account password"
-    body = "Locked out of my user portal and reset link is expired."
-    candidates = @(
-        @{
-            id = 1
-            subject = "Unable to reset password"
-            body = "I cannot log into my account after requesting a password reset."
-            predicted_queue = "Billing and Payments"
-        }
-    )
-    threshold = 0.55
-    top_k = 3
-} | ConvertTo-Json -Depth 5
-
-Invoke-RestMethod -Uri "http://localhost:8000/duplicates" -Method Post -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 5
+cd ml-service
+.\.venv\Scripts\Activate.ps1
+python test_api.py
 ```
 
-Example response (HTTP 200):
-```json
-{
-  "has_duplicates": true,
-  "threshold": 0.55,
-  "candidate_count": 1,
-  "duplicates": [
-    {
-      "id": 1,
-      "subject": "Unable to reset password",
-      "body": "I cannot log into my account after requesting a password reset.",
-      "predicted_queue": "Billing and Payments",
-      "confidence": null,
-      "created_at": null,
-      "similarity_score": 0.8887
-    }
-  ]
-}
-```
+### 4. Semantic Duplicate Detection Test Suite
 
-#### Model Metrics Endpoint (`GET /metrics`)
-
-Returns the frozen evaluation metrics saved during training in `ml-service/artifacts/metrics.json`.
-
-**Request (PowerShell):**
-```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/metrics" -Method Get | ConvertTo-Json -Depth 5
-```
-
-Returns test accuracy (`51.23%`), macro F1 (`52.23%`), majority class baseline comparison (`28.56%` accuracy, `4.44%` macro F1), per-class metrics, and dataset split counts.
-
-#### Running Duplicate Detection Test Suite
+Verifies sentence-transformer model loading, handling of empty candidate sets, high-similarity duplicate triggers (> 0.70 score), and separation of unrelated tickets (< 0.40 score):
 
 ```powershell
 cd ml-service
@@ -580,133 +451,28 @@ cd ml-service
 python test_duplicates.py
 ```
 
-Tests:
-1. `/health` reporting both classifier and sentence-transformer models loaded.
-2. Empty candidate list handling (`has_duplicates: false, duplicates: []`).
-3. Highly similar tickets (> 0.70 similarity threshold triggering duplicate flag).
-4. Unrelated tickets (< 0.40 similarity passing as unique).
-
 ---
 
-### 6. Model Evaluation & Explainability (Step 8)
+## Limitations and Future Improvements
 
-#### Performance Summary (Measured on Held-out Test Set)
-- **Model Architecture:** Scikit-Learn Pipeline — `TfidfVectorizer` (sublinear TF, min_df=3, max_df=0.9, ngram_range=(1,2)) + `LogisticRegression` (class_weight='balanced', C=1.0, max_iter=1000).
-- **Test Accuracy:** **51.23%** (vs Majority Baseline 28.56%)
-- **Test Macro F1:** **52.23%** (vs Majority Baseline 4.44%)
-- **Test Weighted F1:** **51.25%**
-- **Dataset Partitioning:** 19,786 train tickets, 4,241 validation tickets, 4,236 test tickets across 10 target departments.
+### Current Limitations
 
-#### Identified Limitations & Misclassifications
-1. **Lexical Keyword Overlap:**
-   - TF-IDF relies on n-gram keyword token frequencies. Departments with overlapping vocabulary (e.g. *Product Support*, *Technical Support*, *IT Support*, and *Customer Service*) frequently exchange false positives.
-   - For example, 164 *Product Support* test tickets are misclassified as *Technical Support*, and 155 *Technical Support* tickets are misclassified as *IT Support*.
-2. **Short or Ambiguous Tickets:**
-   - Single-word subjects (e.g., "Error", "Help", "Login") lack distinctive domain tokens, producing flat probability distributions where the top class has low margin.
-3. **Softmax Confidence Calibration:**
-   - Softmax probabilities reflect normalized linear decision boundary distances, **not calibrated Bayesian ground truth**. A confidence score of 0.65 does not mean there is a 65% guarantee the prediction is correct. Human triage oversight is required for critical tickets.
-4. **Duplicate Independence:**
-   - Semantic duplicate matching (`all-MiniLM-L6-v2`) is strictly an advisory aid. An identified duplicate does not alter predicted queues or discard tickets.
+1. **Vocabulary and Lexical Overlap:**
+   The classification pipeline relies on TF-IDF n-gram token frequencies. Support categories with overlapping vocabularies (e.g., *Product Support*, *Technical Support*, and *IT Support*) exhibit cross-class confusion.
+2. **Short or Ambiguous Ticket Content:**
+   Tickets with very short bodies (e.g., "Cannot log in") lack distinct technical n-grams, resulting in flatter probability distributions where the top prediction margin is narrow.
+3. **Uncalibrated Output Probabilities:**
+   Softmax probability scores reflect distance from the decision boundary rather than calibrated Bayesian confidence. A confidence score of 60% does not imply a 60% empirical probability of correctness.
+4. **Synthetic Training Data:**
+   The underlying dataset (`Tobi-Bueck/customer-support-tickets`) was synthetically generated. Real-world corporate tickets often exhibit varied phrasing, domain-specific terminology, and noisy formatting.
+5. **Static Queue Taxonomy:**
+   The 10 support queues are fixed within the trained model artifact. Adding or removing departments requires an offline pipeline retraining run.
+6. **In-Memory Similarity Computation:**
+   Candidate similarity comparison currently encodes candidate tickets in memory during inference. While effective for demonstration, larger production archives would require indexing in a dedicated vector database or PostgreSQL extension (`pgvector`).
 
----
+### Future Improvements
 
-### 7. ML Service — Training the Baseline Model
-
-To train the ticket classification baseline (TF-IDF + Logistic Regression on `Tobi-Bueck/customer-support-tickets`), run the following Windows PowerShell commands:
-
-```powershell
-# Navigate to ml-service directory
-cd ml-service
-
-# Activate the virtual environment
-.\.venv\Scripts\Activate.ps1
-
-# Optional troubleshooting: If script activation is blocked by execution policy, run:
-# Set-ExecutionPolicy -Scope Process Bypass
-
-# Install training dependencies
-pip install -r requirements-train.txt
-
-# Run the training and evaluation script
-python train.py
-```
-
-The training process executes:
-1. Loads the `Tobi-Bueck/customer-support-tickets` dataset from Hugging Face.
-2. Filters to English tickets, combines subject and body, and validates queue labels.
-3. Performs duplicate analysis and group-aware stratified train/validation/test splits (no text leakage across splits).
-4. Trains standard and balanced `LogisticRegression` baselines, selecting the best model based on validation macro F1.
-5. Evaluates on the held-out test set and saves artifacts to `ml-service/artifacts/`:
-   - `metrics.json` — Evaluation metrics, class distributions, and environment metadata (tracked in Git).
-   - `classes.json` — Retained target queue classes (tracked in Git).
-   - `confusion_matrix.csv` — Test set confusion matrix (tracked in Git).
-   - `tfidf_lr_pipeline.joblib` — Serialized scikit-learn pipeline (excluded from Git via `.gitignore`).
-
----
-
-## Running All Services Simultaneously
-
-Open **three terminal tabs** and run the commands above in each.
-
-Or use a process manager such as [concurrently](https://github.com/open-cli-tools/concurrently):
-
-```bash
-# From the repo root (install once)
-npm install -g concurrently
-
-concurrently \
-  "cd frontend && npm run dev" \
-  "cd backend && npm run dev" \
-  "cd ml-service && .venv/Scripts/activate && uvicorn app.main:app --reload --port 8000"
-```
-
----
-
-## Key Endpoints Summary
-
-| Service | Endpoint | Method | Description |
-|---------|----------|--------|-------------|
-| Backend | `http://localhost:4000/health` | GET | Backend health check |
-| Backend | `http://localhost:4000/api/tickets/predict` | POST | Classifies queue, checks semantic duplicates, and archives ticket |
-| Backend | `http://localhost:4000/api/tickets/duplicates` | POST | Dedicated endpoint to check duplicates against database archive |
-| Backend | `http://localhost:4000/api/tickets` | GET | Retrieves all saved tickets from Supabase with attached feedback |
-| Backend | `http://localhost:4000/api/tickets/:id/feedback` | POST | Records support agent routing feedback (correct / reassigned) |
-| Backend | `http://localhost:4000/api/tickets/metrics` | GET | Proxies model evaluation metrics from ML service |
-| ML Service | `http://localhost:8000/health` | GET | ML service status and model loading state |
-| ML Service | `http://localhost:8000/metrics` | GET | Returns evaluation metrics from `artifacts/metrics.json` |
-| ML Service | `http://localhost:8000/predict` | POST | Direct ML queue inference endpoint |
-| ML Service | `http://localhost:8000/duplicates` | POST | Semantic duplicate detection using `all-MiniLM-L6-v2` |
-| ML Service Docs | `http://localhost:8000/docs` | GET | Swagger interactive API docs |
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 18, Vite 6 |
-| Backend | Node.js 20+, Express 4, ES Modules, `@supabase/supabase-js` |
-| Database | Supabase (PostgreSQL, PostgREST) |
-| ML Classification | Python 3.11+, Scikit-Learn (TF-IDF + Logistic Regression) |
-| Semantic Embeddings | Sentence-Transformers (`all-MiniLM-L6-v2`), PyTorch |
-| API Serving | FastAPI, Uvicorn |
-
----
-
-## Academic Evaluation & Model Notes
-
-### 1. Confidence Scores and Calibration
-- The model outputs raw softmax probabilities from a multinomial Logistic Regression classifier over learned TF-IDF n-grams.
-- These estimated probabilities are uncalibrated and reflect statistical feature correlation rather than guaranteed Bayesian certainty.
-- The **40% threshold** is an operational UI heuristic designed to highlight ambiguous predictions ("Needs review") for human triaging. It is not an empirically validated decision boundary.
-
-### 2. Dataset Provenance & Synthetic Origin
-- The underlying corpus is derived from the `Tobi-Bueck/customer-support-tickets` repository.
-- As explicitly documented by the dataset author ("Synthetic IT Ticket Generator" via `open-ticket-ai.com`), tickets were generated synthetically to enable open-source triage modeling without exposing PII.
-
-### 3. Data Partitioning & Leakage Prevention
-- Data splits are strictly partitioned using a stratified group split grouped by normalized ticket text (`ticket_text_norm`), guaranteeing zero overlap of duplicate text across Train (19,786 rows / 70%), Validation (4,239 rows / 15%), and Test (4,236 rows / 15%) sets.
-
-### 4. Target Queues Source of Truth
-- The 10 support queues are defined statically by the trained model pipeline (`classes.json`).
-- Future queue adaptations require offline pipeline retraining. Runtime queue modifications, multi-tenancy, and universal classifiers are intentionally excluded from scope to preserve reproducibility.
+- **Transformer-Based Classification:** Benchmark lightweight fine-tuned models (e.g., DistilBERT or ModernBERT) to capture deeper semantic context beyond lexical n-grams.
+- **Active Learning & Retraining Pipeline:** Implement an automated retraining pipeline that utilizes validated records from `public.ticket_feedback` to iteratively improve model performance.
+- **Vector Search Optimization:** Migrate semantic duplicate search to `pgvector` inside Supabase to perform nearest-neighbor indexing directly at the database layer.
+- **Ticketing System Integrations:** Add webhook listeners and dispatchers for platforms such as Zendesk, Jira Service Management, or GitHub Issues.
