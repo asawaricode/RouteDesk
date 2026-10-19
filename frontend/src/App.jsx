@@ -1,4 +1,4 @@
-import { useState, useId } from 'react'
+import { useState, useId, useEffect } from 'react'
 import './App.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000'
@@ -34,8 +34,72 @@ function App() {
   const [apiError, setApiError] = useState('')
   const [prediction, setPrediction] = useState(null)
 
+  // Supabase ticket history state
+  const [tickets, setTickets] = useState([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState('')
+
   const subjectId = useId()
   const bodyId = useId()
+
+  const fetchTickets = async () => {
+    setHistoryLoading(true)
+    setHistoryError('')
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/tickets`)
+      const data = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        const errorMsg = data.error || `Server responded with status ${response.status}`
+        const errorDetails = typeof data.details === 'string' ? data.details : (data.details ? JSON.stringify(data.details) : '')
+        setHistoryError(errorDetails ? `${errorMsg}: ${errorDetails}` : errorMsg)
+        return
+      }
+
+      setTickets(Array.isArray(data) ? data : [])
+    } catch (err) {
+      setHistoryError(
+        `Unable to fetch ticket history from ${API_BASE_URL}. (${err.message})`
+      )
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    let ignore = false
+    const load = async () => {
+      setHistoryLoading(true)
+      setHistoryError('')
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/tickets`)
+        const data = await response.json().catch(() => ({}))
+        if (ignore) return
+
+        if (!response.ok) {
+          const errorMsg = data.error || `Server responded with status ${response.status}`
+          const errorDetails = typeof data.details === 'string' ? data.details : (data.details ? JSON.stringify(data.details) : '')
+          setHistoryError(errorDetails ? `${errorMsg}: ${errorDetails}` : errorMsg)
+          return
+        }
+
+        setTickets(Array.isArray(data) ? data : [])
+      } catch (err) {
+        if (!ignore) {
+          setHistoryError(`Unable to fetch ticket history from ${API_BASE_URL}. (${err.message})`)
+        }
+      } finally {
+        if (!ignore) {
+          setHistoryLoading(false)
+        }
+      }
+    }
+
+    load()
+    return () => {
+      ignore = true
+    }
+  }, [])
 
   const handlePredict = async (e) => {
     if (e) e.preventDefault()
@@ -70,7 +134,7 @@ function App() {
       const data = await response.json().catch(() => ({}))
 
       if (!response.ok) {
-        // Detailed error message from backend or ML service
+        // Detailed error message from backend, ML service, or database
         const errorMsg = data.error || `Server responded with status ${response.status}`
         const errorDetails = typeof data.details === 'string' ? data.details : (data.details ? JSON.stringify(data.details) : '')
         setApiError(errorDetails ? `${errorMsg}: ${errorDetails}` : errorMsg)
@@ -79,6 +143,9 @@ function App() {
       }
 
       setPrediction(data)
+
+      // Refresh ticket history to display the newly saved ticket
+      fetchTickets()
     } catch (err) {
       setApiError(
         `Unable to reach backend at ${API_BASE_URL}. Ensure the Express server is running on port 4000. (${err.message})`
@@ -110,6 +177,23 @@ function App() {
     return `${(conf * 100).toFixed(1)}%`
   }
 
+  // Format date helper
+  const formatDate = (isoString) => {
+    if (!isoString) return '—'
+    try {
+      const d = new Date(isoString)
+      return d.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    } catch {
+      return isoString
+    }
+  }
+
   // Get sorted list of probabilities for the breakdown
   const sortedProbabilities = prediction?.probabilities
     ? Object.entries(prediction.probabilities)
@@ -133,6 +217,9 @@ function App() {
         <div className="header-meta">
           <span className="badge badge-live">
             <span className="live-dot"></span> ML Baseline Active
+          </span>
+          <span className="badge badge-db">
+            <span className="db-dot"></span> Supabase Connected
           </span>
           <span className="backend-url-tag">Gateway: {API_BASE_URL}</span>
         </div>
@@ -212,10 +299,10 @@ function App() {
               </div>
             )}
 
-            {/* API / ML Error Banner */}
+            {/* API / ML / DB Error Banner */}
             {apiError && (
               <div id="error-banner" className="banner banner-error" role="alert">
-                <span className="banner-icon">x</span>
+                <span className="banner-icon">✕</span>
                 <div>
                   <strong>Service Error:</strong> {apiError}
                 </div>
@@ -233,12 +320,12 @@ function App() {
                 {loading ? (
                   <>
                     <span className="spinner" aria-hidden="true"></span>
-                    <span>Classifying Ticket...</span>
+                    <span>Classifying & Archiving Ticket...</span>
                   </>
                 ) : (
                   <>
                     <span className="btn-icon">⚡</span>
-                    <span>Predict Queue</span>
+                    <span>Predict & Save Queue</span>
                   </>
                 )}
               </button>
@@ -314,7 +401,7 @@ function App() {
                 <div className="placeholder-icon">📋</div>
                 <h3>No Ticket Evaluated Yet</h3>
                 <p>
-                  Fill in the ticket subject or description on the left and click <strong>Predict Queue</strong> to view the routing prediction.
+                  Fill in the ticket subject or description on the left and click <strong>Predict & Save Queue</strong> to view the routing prediction.
                 </p>
               </div>
             )}
@@ -336,15 +423,124 @@ function App() {
               <span className="tech-tag">TF-IDF N-grams</span>
               <span className="tech-tag">Logistic Regression</span>
               <span className="tech-tag">10 Target Queues</span>
-              <span className="tech-tag">Group-Stratified</span>
+              <span className="tech-tag">Supabase Archive</span>
             </div>
           </section>
         </div>
       </main>
 
+      {/* Ticket History Section */}
+      <section className="card card-history" id="ticket-history-section">
+        <div className="history-header">
+          <div>
+            <div className="history-title-row">
+              <h2>Ticket History</h2>
+              <span className="badge badge-count" id="tickets-count-badge">
+                {tickets.length} {tickets.length === 1 ? 'ticket' : 'tickets'}
+              </span>
+            </div>
+            <p className="card-subtitle">
+              Stored predictions retrieved newest first from Supabase (<span className="table-name-tag">public.tickets</span>).
+            </p>
+          </div>
+
+          <button
+            id="refresh-history-btn"
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={fetchTickets}
+            disabled={historyLoading}
+            title="Refresh history from database"
+          >
+            {historyLoading ? (
+              <>
+                <span className="spinner spinner-sm" aria-hidden="true"></span>
+                <span>Refreshing...</span>
+              </>
+            ) : (
+              <>
+                <span className="btn-icon">↻</span>
+                <span>Refresh History</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* History Error Banner */}
+        {historyError && (
+          <div id="history-error-banner" className="banner banner-warning" role="alert">
+            <span className="banner-icon">!</span>
+            <div>
+              <strong>Database status:</strong> {historyError}
+            </div>
+          </div>
+        )}
+
+        {/* History List or Table */}
+        {historyLoading && tickets.length === 0 ? (
+          <div className="history-loading-state">
+            <span className="spinner" aria-hidden="true"></span>
+            <p>Loading ticket history from database...</p>
+          </div>
+        ) : tickets.length === 0 ? (
+          <div className="placeholder-state history-empty-state">
+            <div className="placeholder-icon">🗄️</div>
+            <h3>No Saved Tickets Yet</h3>
+            <p>
+              Submit a support ticket above. Once classified, it will be automatically archived into your Supabase database and displayed here.
+            </p>
+          </div>
+        ) : (
+          <div className="table-responsive">
+            <table className="tickets-table" id="tickets-history-table">
+              <thead>
+                <tr>
+                  <th scope="col" className="th-id">ID</th>
+                  <th scope="col" className="th-date">Logged At</th>
+                  <th scope="col" className="th-subject">Subject</th>
+                  <th scope="col" className="th-body">Description Preview</th>
+                  <th scope="col" className="th-queue">Predicted Queue</th>
+                  <th scope="col" className="th-confidence">Confidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tickets.map((t) => (
+                  <tr key={t.id || `${t.created_at}-${t.subject}`}>
+                    <td className="td-id">
+                      <span className="ticket-id-badge">#{t.id}</span>
+                    </td>
+                    <td className="td-date">{formatDate(t.created_at)}</td>
+                    <td className="td-subject">
+                      <div className="ticket-subject-cell" title={t.subject || ''}>
+                        {t.subject || <span className="cell-muted">—</span>}
+                      </div>
+                    </td>
+                    <td className="td-body">
+                      <div className="ticket-body-cell" title={t.body || ''}>
+                        {t.body || <span className="cell-muted">—</span>}
+                      </div>
+                    </td>
+                    <td className="td-queue">
+                      <span className="queue-pill" title={t.predicted_queue}>
+                        {t.predicted_queue}
+                      </span>
+                    </td>
+                    <td className="td-confidence">
+                      <span className="confidence-pill">
+                        {formatConfidence(t.confidence)}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       {/* Footer */}
       <footer className="app-footer">
-        <p>RouteDesk Ticket Routing System &bull; 3-Tier Architecture (React + Express + FastAPI)</p>
+        <p>RouteDesk Ticket Routing System &bull; 3-Tier Architecture (React + Express + FastAPI + Supabase)</p>
       </footer>
     </div>
   )

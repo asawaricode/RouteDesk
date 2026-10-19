@@ -1,13 +1,44 @@
 import { Router } from "express";
+import { supabase } from "../supabase.js";
 
 const router = Router();
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://127.0.0.1:8000";
+
+/**
+ * GET /api/tickets
+ *
+ * Retrieves saved tickets from Supabase, ordered newest first.
+ */
+router.get("/", async (_req, res) => {
+  try {
+    const { data: tickets, error } = await supabase
+      .from("tickets")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[ERROR] Failed to retrieve tickets from Supabase:", error.message);
+      return res.status(500).json({
+        error: "Failed to retrieve tickets from database.",
+        details: error.message,
+      });
+    }
+
+    return res.status(200).json(tickets || []);
+  } catch (err) {
+    console.error("[ERROR] Unexpected error in GET /api/tickets:", err);
+    return res.status(500).json({
+      error: "An unexpected error occurred while fetching tickets.",
+    });
+  }
+});
 
 /**
  * POST /api/tickets/predict
  *
  * Forwards ticket subject and body to the FastAPI ML service for classification.
  * Validates that at least one field has non-whitespace text.
+ * After receiving a successful prediction, persists the ticket and prediction to Supabase.
  */
 router.post("/predict", async (req, res) => {
   try {
@@ -61,12 +92,40 @@ router.post("/predict", async (req, res) => {
       });
     }
 
-    // 4. Return prediction result
-    const data = await mlResponse.json();
+    // 4. ML prediction succeeded
+    const predictionData = await mlResponse.json();
+
+    // 5. Persist ticket record and prediction to Supabase public.tickets
+    const { data: savedTicket, error: insertError } = await supabase
+      .from("tickets")
+      .insert([
+        {
+          subject: cleanSubject,
+          body: cleanBody,
+          predicted_queue: predictionData.queue,
+          confidence: predictionData.confidence,
+        },
+      ])
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error("[ERROR] Failed to save ticket to Supabase:", insertError.message);
+      return res.status(500).json({
+        error: "Prediction succeeded, but failed to save ticket to database.",
+        details: insertError.message,
+        queue: predictionData.queue,
+        confidence: predictionData.confidence,
+        probabilities: predictionData.probabilities,
+      });
+    }
+
+    // 6. Return prediction result and saved ticket data
     return res.status(200).json({
-      queue: data.queue,
-      confidence: data.confidence,
-      probabilities: data.probabilities,
+      queue: predictionData.queue,
+      confidence: predictionData.confidence,
+      probabilities: predictionData.probabilities,
+      ticket: savedTicket,
     });
   } catch (err) {
     console.error("[ERROR] Unexpected error in /api/tickets/predict:", err);

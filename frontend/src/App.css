@@ -85,12 +85,25 @@
   border: 1px solid var(--success-border);
 }
 
+.badge-db {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
 .live-dot {
   width: 7px;
   height: 7px;
   background-color: var(--success);
   border-radius: 50%;
   animation: pulse 2s infinite ease-in-out;
+}
+
+.db-dot {
+  width: 7px;
+  height: 7px;
+  background-color: #38bdf8;
+  border-radius: 50%;
 }
 
 @keyframes pulse {
@@ -369,6 +382,17 @@
   animation: spin 0.8s linear infinite;
 }
 
+.spinner-sm {
+  width: 12px;
+  height: 12px;
+  border-width: 1.5px;
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 0.825rem;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -585,6 +609,183 @@
   border: 1px solid var(--border);
 }
 
+/* Ticket History Card */
+.card-history {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.history-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.history-title-row h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.badge-count {
+  background: var(--bg-chip);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.table-name-tag {
+  font-family: var(--font-mono);
+  color: var(--accent-primary);
+  font-size: 0.8rem;
+}
+
+.history-loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 16px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.history-empty-state {
+  padding: 40px 16px;
+}
+
+/* Table Responsive */
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+
+.tickets-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.875rem;
+}
+
+.tickets-table thead {
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--border);
+}
+
+.tickets-table th {
+  padding: 12px 16px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.tickets-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.tickets-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.tickets-table tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+.tickets-table tbody tr:hover {
+  background-color: var(--bg-card-hover);
+}
+
+.th-id { width: 70px; }
+.th-date { width: 160px; }
+.th-subject { width: 220px; }
+.th-body { min-width: 260px; }
+.th-queue { width: 170px; }
+.th-confidence { width: 100px; text-align: right; }
+
+.td-confidence {
+  text-align: right;
+}
+
+.ticket-id-badge {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-app);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.td-date {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.ticket-subject-cell {
+  font-weight: 600;
+  color: var(--text-primary);
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ticket-body-cell {
+  color: var(--text-secondary);
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.825rem;
+}
+
+.cell-muted {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.queue-pill {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--accent-primary);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  white-space: nowrap;
+}
+
+.confidence-pill {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.825rem;
+  color: var(--success);
+}
+
 /* Footer */
 .app-footer {
   margin-top: auto;
@@ -594,3 +795,4 @@
   font-size: 0.8rem;
   color: var(--text-muted);
 }
+
