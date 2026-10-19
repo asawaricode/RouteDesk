@@ -1,8 +1,10 @@
 """
 RouteDesk ML Service — FastAPI application entry point.
 
-Provides ticket classification model inference and health endpoints.
-Loads the trained TF-IDF + LogisticRegression baseline pipeline on startup.
+Provides:
+1. Support-ticket classification (TF-IDF + Logistic Regression).
+2. Semantic duplicate ticket detection (all-MiniLM-L6-v2 sentence transformer).
+3. Health and diagnostics endpoints.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
+from sentence_transformers import SentenceTransformer, util
 
 load_dotenv()
 
@@ -31,6 +34,8 @@ MODEL_PATH = ARTIFACTS_DIR / "tfidf_lr_pipeline.joblib"
 CLASSES_PATH = ARTIFACTS_DIR / "classes.json"
 METRICS_PATH = ARTIFACTS_DIR / "metrics.json"
 
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+
 # Global state for loaded model artifacts
 model_state: dict[str, Any] = {
     "model": None,
@@ -40,22 +45,29 @@ model_state: dict[str, Any] = {
     "error": None,
 }
 
+# Global state for sentence embedding model
+embedding_state: dict[str, Any] = {
+    "model": None,
+    "model_name": EMBEDDING_MODEL_NAME,
+    "loaded_at": None,
+    "error": None,
+}
+
 
 # ── Lifespan handler ──────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup / shutdown hook — load saved model and class labels at startup."""
-    print(f"[*] Loading ML model from: {MODEL_PATH}")
+    """Startup / shutdown hook — loads classification model and sentence transformer."""
+    # 1. Load classification pipeline
+    print(f"[*] Loading classification model from: {MODEL_PATH}")
     try:
         if not MODEL_PATH.exists():
-            raise FileNotFoundError(f"Model file not found at: {MODEL_PATH}")
+            raise FileNotFoundError(f"Classification model file not found at: {MODEL_PATH}")
 
-        # Load pipeline
         model = joblib.load(MODEL_PATH)
         model_state["model"] = model
 
-        # Load classes
         if CLASSES_PATH.exists():
             with open(CLASSES_PATH, "r", encoding="utf-8") as f:
                 classes = json.load(f)
@@ -67,19 +79,30 @@ async def lifespan(app: FastAPI):
         model_state["classes"] = classes
         model_state["loaded_at"] = datetime.now(timezone.utc).isoformat()
         model_state["error"] = None
-
-        print(
-            f"[OK] Model pipeline loaded successfully ({len(classes)} target classes)"
-        )
+        print(f"[OK] Classifier loaded ({len(classes)} target classes)")
     except Exception as exc:
-        print(f"[ERROR] Failed to load ML model: {exc}")
+        print(f"[ERROR] Failed to load classifier model: {exc}")
         model_state["model"] = None
         model_state["error"] = str(exc)
+
+    # 2. Load sentence embedding model for duplicate detection
+    print(f"[*] Loading sentence-transformer model: {EMBEDDING_MODEL_NAME}")
+    try:
+        embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        embedding_state["model"] = embed_model
+        embedding_state["loaded_at"] = datetime.now(timezone.utc).isoformat()
+        embedding_state["error"] = None
+        print(f"[OK] SentenceTransformer '{EMBEDDING_MODEL_NAME}' loaded successfully")
+    except Exception as exc:
+        print(f"[ERROR] Failed to load SentenceTransformer: {exc}")
+        embedding_state["model"] = None
+        embedding_state["error"] = str(exc)
 
     yield
 
     # Teardown
     model_state["model"] = None
+    embedding_state["model"] = None
     print("[--] ML service shut down")
 
 
@@ -87,8 +110,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="RouteDesk ML Service",
-    description="Support-ticket classification and routing API.",
-    version="0.2.0",
+    description="Support-ticket classification and semantic duplicate detection API.",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -139,28 +162,112 @@ class PredictResponse(BaseModel):
     )
 
 
+class DuplicateCandidate(BaseModel):
+    id: Any = Field(description="Unique ticket ID or reference.")
+    subject: Optional[str] = Field(default="", description="Candidate ticket subject.")
+    body: Optional[str] = Field(default="", description="Candidate ticket body.")
+    predicted_queue: Optional[str] = Field(
+        default=None, description="Previous predicted queue if known."
+    )
+    confidence: Optional[float] = Field(default=None, description="Model confidence.")
+    created_at: Optional[str] = Field(
+        default=None, description="ISO timestamp when candidate ticket was logged."
+    )
+
+
+class DuplicateDetectionRequest(BaseModel):
+    subject: Optional[str] = Field(
+        default=None, description="Subject of the incoming ticket to check."
+    )
+    body: Optional[str] = Field(
+        default=None, description="Body description of the incoming ticket."
+    )
+    candidates: list[DuplicateCandidate] = Field(
+        default_factory=list,
+        description="List of previously saved tickets to compare against.",
+    )
+    threshold: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description="Similarity score threshold (0.0 to 1.0) above which a ticket is flagged as duplicate.",
+    )
+    top_k: int = Field(
+        default=3,
+        ge=1,
+        le=50,
+        description="Maximum number of most similar candidates to return.",
+    )
+
+    @model_validator(mode="after")
+    def validate_incoming_ticket(self) -> DuplicateDetectionRequest:
+        s = (self.subject or "").strip()
+        b = (self.body or "").strip()
+        if not s and not b:
+            raise ValueError(
+                "Invalid request: at least one of 'subject' or 'body' must be non-empty."
+            )
+        return self
+
+
+class SimilarTicket(BaseModel):
+    id: Any
+    subject: str
+    body: str
+    predicted_queue: Optional[str] = None
+    confidence: Optional[float] = None
+    created_at: Optional[str] = None
+    similarity_score: float = Field(
+        description="Cosine similarity score (0.0 to 1.0) between incoming ticket and this candidate."
+    )
+
+
+class DuplicateDetectionResponse(BaseModel):
+    has_duplicates: bool = Field(
+        description="True if the top candidate's similarity score is greater than or equal to threshold."
+    )
+    threshold: float = Field(description="Threshold used for duplicate qualification.")
+    candidate_count: int = Field(
+        description="Total number of candidates evaluated from ticket history."
+    )
+    duplicates: list[SimilarTicket] = Field(
+        default_factory=list,
+        description="Ranked list of top candidate tickets with highest semantic similarity.",
+    )
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["Meta"])
 async def health_check():
-    """Health-check endpoint — reports service health and whether the model is loaded."""
-    is_loaded = model_state.get("model") is not None
+    """Health-check endpoint — reports status of classifier and sentence-transformer models."""
+    is_classifier_loaded = model_state.get("model") is not None
+    is_embed_loaded = embedding_state.get("model") is not None
     classes = model_state.get("classes", [])
 
     payload: dict[str, Any] = {
-        "status": "ok" if is_loaded else "degraded",
+        "status": "ok" if (is_classifier_loaded and is_embed_loaded) else "degraded",
         "service": "routedesk-ml-service",
-        "model_loaded": is_loaded,
+        "model_loaded": is_classifier_loaded,
+        "embedding_model_loaded": is_embed_loaded,
+        "embedding_model": EMBEDDING_MODEL_NAME,
         "model_path": model_state.get("model_path"),
         "classes_count": len(classes),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    if is_loaded:
+    if is_classifier_loaded:
         payload["classes"] = classes
         payload["loaded_at"] = model_state.get("loaded_at")
     else:
-        payload["error"] = model_state.get("error", "Model artifact not loaded")
+        payload["error"] = model_state.get("error", "Classification model artifact not loaded")
+
+    if is_embed_loaded:
+        payload["embedding_loaded_at"] = embedding_state.get("loaded_at")
+    else:
+        payload["embedding_error"] = embedding_state.get(
+            "error", "SentenceTransformer model not loaded"
+        )
 
     return payload
 
@@ -185,7 +292,6 @@ async def predict_ticket(request: PredictRequest):
             detail=f"Classification model is not loaded. Details: {model_state.get('error')}",
         )
 
-    # Combine subject and body exactly as done during training
     parts: list[str] = []
     if request.subject and request.subject.strip():
         parts.append(request.subject.strip())
@@ -200,7 +306,6 @@ async def predict_ticket(request: PredictRequest):
         )
 
     try:
-        # Run inference via scikit-learn pipeline (TF-IDF + LogisticRegression)
         classes = model.classes_
         probabilities = model.predict_proba([combined_text])[0]
         best_idx = int(np.argmax(probabilities))
@@ -208,7 +313,6 @@ async def predict_ticket(request: PredictRequest):
         predicted_queue = str(classes[best_idx])
         confidence = float(probabilities[best_idx])
 
-        # Distribution across all classes
         prob_dict = {
             str(cls): round(float(prob), 4)
             for cls, prob in zip(classes, probabilities)
@@ -223,4 +327,125 @@ async def predict_ticket(request: PredictRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Inference error: {exc}",
+        )
+
+
+@app.post(
+    "/duplicates",
+    response_model=DuplicateDetectionResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Semantic Similarity"],
+)
+async def detect_duplicates(request: DuplicateDetectionRequest):
+    """
+    Compare incoming ticket subject/body against candidate tickets using all-MiniLM-L6-v2 embeddings.
+
+    Computes cosine similarity between incoming ticket vector and candidate vectors.
+    Returns ranked most similar tickets with similarity scores.
+    """
+    embed_model = embedding_state.get("model")
+    if embed_model is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"SentenceTransformer embedding model is not loaded. Details: {embedding_state.get('error')}",
+        )
+
+    # If candidates list is empty (e.g. no prior tickets in DB), return empty results immediately
+    if not request.candidates:
+        return DuplicateDetectionResponse(
+            has_duplicates=False,
+            threshold=request.threshold,
+            candidate_count=0,
+            duplicates=[],
+        )
+
+    # 1. Format incoming ticket text
+    incoming_parts: list[str] = []
+    if request.subject and request.subject.strip():
+        incoming_parts.append(request.subject.strip())
+    if request.body and request.body.strip():
+        incoming_parts.append(request.body.strip())
+
+    incoming_text = " ".join(incoming_parts).strip()
+    if not incoming_text:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Incoming ticket text cannot be empty.",
+        )
+
+    # 2. Format candidate texts
+    candidate_texts: list[str] = []
+    valid_candidates: list[DuplicateCandidate] = []
+
+    for c in request.candidates:
+        c_parts: list[str] = []
+        if c.subject and str(c.subject).strip():
+            c_parts.append(str(c.subject).strip())
+        if c.body and str(c.body).strip():
+            c_parts.append(str(c.body).strip())
+        c_text = " ".join(c_parts).strip()
+
+        # Only evaluate candidates with some text content
+        if c_text:
+            candidate_texts.append(c_text)
+            valid_candidates.append(c)
+
+    if not candidate_texts:
+        return DuplicateDetectionResponse(
+            has_duplicates=False,
+            threshold=request.threshold,
+            candidate_count=len(request.candidates),
+            duplicates=[],
+        )
+
+    try:
+        # 3. Compute normalized sentence embeddings
+        target_embedding = embed_model.encode(
+            incoming_text,
+            convert_to_tensor=True,
+            normalize_embeddings=True,
+        )
+        candidate_embeddings = embed_model.encode(
+            candidate_texts,
+            convert_to_tensor=True,
+            normalize_embeddings=True,
+            batch_size=32,
+        )
+
+        # 4. Compute cosine similarity (dot product of normalized tensors)
+        cosine_scores = util.cos_sim(target_embedding, candidate_embeddings)[0]
+
+        scored_matches: list[SimilarTicket] = []
+        for cand, score in zip(valid_candidates, cosine_scores):
+            score_float = round(float(score.item()), 4)
+            scored_matches.append(
+                SimilarTicket(
+                    id=cand.id,
+                    subject=cand.subject or "",
+                    body=cand.body or "",
+                    predicted_queue=cand.predicted_queue,
+                    confidence=cand.confidence,
+                    created_at=cand.created_at,
+                    similarity_score=score_float,
+                )
+            )
+
+        # Sort descending by similarity score
+        scored_matches.sort(key=lambda item: item.similarity_score, reverse=True)
+
+        top_candidates = scored_matches[: request.top_k]
+        has_duplicates = any(
+            cand.similarity_score >= request.threshold for cand in top_candidates
+        )
+
+        return DuplicateDetectionResponse(
+            has_duplicates=has_duplicates,
+            threshold=request.threshold,
+            candidate_count=len(request.candidates),
+            duplicates=top_candidates,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Semantic duplicate detection error: {exc}",
         )

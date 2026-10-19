@@ -39,6 +39,9 @@ function App() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
 
+  // Semantic duplicate detection state
+  const [duplicateDetection, setDuplicateDetection] = useState(null)
+
   const subjectId = useId()
   const bodyId = useId()
 
@@ -139,10 +142,12 @@ function App() {
         const errorDetails = typeof data.details === 'string' ? data.details : (data.details ? JSON.stringify(data.details) : '')
         setApiError(errorDetails ? `${errorMsg}: ${errorDetails}` : errorMsg)
         setPrediction(null)
+        setDuplicateDetection(null)
         return
       }
 
       setPrediction(data)
+      setDuplicateDetection(data.duplicate_detection || null)
 
       // Refresh ticket history to display the newly saved ticket
       fetchTickets()
@@ -151,6 +156,7 @@ function App() {
         `Unable to reach backend at ${API_BASE_URL}. Ensure the Express server is running on port 4000. (${err.message})`
       )
       setPrediction(null)
+      setDuplicateDetection(null)
     } finally {
       setLoading(false)
     }
@@ -169,6 +175,7 @@ function App() {
     setValidationError('')
     setApiError('')
     setPrediction(null)
+    setDuplicateDetection(null)
   }
 
   // Format confidence to percentage string
@@ -217,6 +224,9 @@ function App() {
         <div className="header-meta">
           <span className="badge badge-live">
             <span className="live-dot"></span> ML Baseline Active
+          </span>
+          <span className="badge badge-ai">
+            <span className="ai-dot"></span> all-MiniLM Duplicates
           </span>
           <span className="badge badge-db">
             <span className="db-dot"></span> Supabase Connected
@@ -402,6 +412,93 @@ function App() {
                 <h3>No Ticket Evaluated Yet</h3>
                 <p>
                   Fill in the ticket subject or description on the left and click <strong>Predict & Save Queue</strong> to view the routing prediction.
+                </p>
+              </div>
+            )}
+          </section>
+
+          {/* Semantic Duplicate Detection Card */}
+          <section id="duplicate-detection-result" className="card card-duplicates">
+            <div className="card-header">
+              <div className="duplicate-title-row">
+                <h2>Semantic Duplicate Analysis</h2>
+                {duplicateDetection && (
+                  <span
+                    id="duplicate-status-badge"
+                    className={`badge ${
+                      duplicateDetection.has_duplicates ? 'badge-warning' : 'badge-live'
+                    }`}
+                  >
+                    {duplicateDetection.has_duplicates ? 'Duplicate Flagged' : 'Unique Ticket'}
+                  </span>
+                )}
+              </div>
+              <p className="card-subtitle">
+                Sentence-transformer similarity (<span className="table-name-tag">all-MiniLM-L6-v2</span>) against previously saved tickets.
+              </p>
+            </div>
+
+            {duplicateDetection ? (
+              <div className="duplicates-content">
+                {duplicateDetection.has_duplicates ? (
+                  <div className="duplicate-alert-box" id="duplicate-alert-box">
+                    <div className="duplicate-alert-header">
+                      <span className="alert-icon-symbol">⚠️</span>
+                      <div>
+                        <strong>Potential Duplicate Detected</strong>
+                        <p className="alert-subtext">
+                          Matching historical ticket(s) exceed the {(duplicateDetection.threshold * 100).toFixed(0)}% semantic similarity threshold. RouteDesk flags duplicates for review but does not auto-merge or discard tickets.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="matched-tickets-list" id="matched-duplicates-list">
+                      {duplicateDetection.duplicates
+                        .filter((d) => d.similarity_score >= duplicateDetection.threshold)
+                        .map((dup) => (
+                          <div key={dup.id} className="matched-ticket-item">
+                            <div className="matched-meta">
+                              <span className="similarity-badge">
+                                {(dup.similarity_score * 100).toFixed(1)}% Match
+                              </span>
+                              <span className="ticket-ref-tag">Ticket #{dup.id}</span>
+                              {dup.predicted_queue && (
+                                <span className="matched-queue-tag">{dup.predicted_queue}</span>
+                              )}
+                            </div>
+                            <h4 className="matched-subject">{dup.subject || 'No subject'}</h4>
+                            <p className="matched-body-preview">{dup.body || 'No description'}</p>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="duplicate-clean-box" id="duplicate-clean-box">
+                    <span className="clean-icon-symbol">✓</span>
+                    <div>
+                      <strong>No Duplicate Detected</strong>
+                      <p className="clean-subtext">
+                        {duplicateDetection.candidate_count > 0 ? (
+                          <>
+                            Evaluated across <strong>{duplicateDetection.candidate_count}</strong> saved {duplicateDetection.candidate_count === 1 ? 'ticket' : 'tickets'} in Supabase.
+                            {duplicateDetection.duplicates.length > 0 && (
+                              <span> Highest similarity observed: <strong>{(duplicateDetection.duplicates[0].similarity_score * 100).toFixed(1)}%</strong>.</span>
+                            )}
+                          </>
+                        ) : (
+                          'No historical tickets in database to compare against. This is the first archived ticket.'
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="placeholder-state placeholder-sm">
+                <div className="placeholder-icon">🔍</div>
+                <h3>Duplicate Check Awaiting Evaluation</h3>
+                <p>
+                  Submit a ticket to run semantic embedding similarity against your archived tickets.
                 </p>
               </div>
             )}

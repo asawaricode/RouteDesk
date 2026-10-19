@@ -80,6 +80,7 @@ npm run dev
 
 - **Ticket Classification Form:** Allows entering ticket `subject` and `body` (description) with instant quick-test templates.
 - **Queue Prediction & Confidence:** Connects to the Express backend (`http://localhost:4000/api/tickets/predict`) to classify tickets into 10 target queues with visual confidence metering and ranked alternative queues.
+- **Semantic Duplicate Detection:** Powered by `all-MiniLM-L6-v2` embeddings, automatically compares submitted tickets against all archived Supabase tickets in real-time, flagging potential duplicates with similarity scores while ensuring no tickets are auto-merged or dropped.
 - **Ticket History Dashboard:** Automatically retrieves persisted tickets from `GET /api/tickets` upon load and refreshes whenever a ticket is classified, featuring ticket ID, timestamp, subject/body previews, queue badges, and confidence metrics.
 - **Error & Validation Handling:** Provides immediate client-side validation when inputs are missing and displays clean server error messages if backend/ML services or database are offline.
 - **ML Transparency Notice:** Features an explicit disclosure that recommendations are ML-generated and subject to human oversight.
@@ -195,7 +196,48 @@ Example response (HTTP 200):
     "predicted_queue": "Billing and Payments",
     "confidence": 0.756,
     "created_at": "2026-10-19T03:45:12.345Z"
+  },
+  "duplicate_detection": {
+    "has_duplicates": false,
+    "threshold": 0.55,
+    "candidate_count": 0,
+    "duplicates": []
   }
+}
+```
+
+#### Ticket Duplicate Check (`POST /api/tickets/duplicates`)
+
+Evaluates semantic similarity of an incoming ticket against saved tickets in Supabase without saving or modifying database records.
+
+**Request (PowerShell):**
+```powershell
+$body = @{
+    subject = "Cannot reset my account password"
+    body    = "Locked out of my portal and reset link expired."
+    threshold = 0.55
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:4000/api/tickets/duplicates" -Method Post -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 5
+```
+
+Example response (HTTP 200):
+```json
+{
+  "has_duplicates": true,
+  "threshold": 0.55,
+  "candidate_count": 2,
+  "duplicates": [
+    {
+      "id": 1,
+      "subject": "Unable to reset password",
+      "body": "I cannot log into my account after requesting a password reset.",
+      "predicted_queue": "Billing and Payments",
+      "confidence": 0.2779,
+      "created_at": "2026-10-19T04:16:25.783Z",
+      "similarity_score": 0.8887
+    }
+  ]
 }
 ```
 
@@ -345,6 +387,64 @@ Returns HTTP 422 Unprocessable Entity with a validation message explaining that 
 
 Interactive Swagger API docs: <http://localhost:8000/docs>
 
+#### Semantic Duplicate Detection (`POST /duplicates`)
+
+Compares incoming ticket `subject` and/or `body` against historical candidate tickets using dense sentence embeddings (`all-MiniLM-L6-v2`) and cosine similarity.
+
+**Request (PowerShell):**
+```powershell
+$body = @{
+    subject = "Cannot reset my account password"
+    body = "Locked out of my user portal and reset link is expired."
+    candidates = @(
+        @{
+            id = 1
+            subject = "Unable to reset password"
+            body = "I cannot log into my account after requesting a password reset."
+            predicted_queue = "Billing and Payments"
+        }
+    )
+    threshold = 0.55
+    top_k = 3
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod -Uri "http://localhost:8000/duplicates" -Method Post -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 5
+```
+
+Example response (HTTP 200):
+```json
+{
+  "has_duplicates": true,
+  "threshold": 0.55,
+  "candidate_count": 1,
+  "duplicates": [
+    {
+      "id": 1,
+      "subject": "Unable to reset password",
+      "body": "I cannot log into my account after requesting a password reset.",
+      "predicted_queue": "Billing and Payments",
+      "confidence": null,
+      "created_at": null,
+      "similarity_score": 0.8887
+    }
+  ]
+}
+```
+
+#### Running Duplicate Detection Test Suite
+
+```powershell
+cd ml-service
+.\.venv\Scripts\Activate.ps1
+python test_duplicates.py
+```
+
+Tests:
+1. `/health` reporting both classifier and sentence-transformer models loaded.
+2. Empty candidate list handling (`has_duplicates: false, duplicates: []`).
+3. Highly similar tickets (> 0.70 similarity threshold triggering duplicate flag).
+4. Unrelated tickets (< 0.40 similarity passing as unique).
+
 ---
 
 ### 6. ML Service — Training the Baseline Model
@@ -404,10 +504,12 @@ concurrently \
 | Service | Endpoint | Method | Description |
 |---------|----------|--------|-------------|
 | Backend | `http://localhost:4000/health` | GET | Backend health check |
-| Backend | `http://localhost:4000/api/tickets/predict` | POST | Classifies ticket via ML service and archives prediction to Supabase |
+| Backend | `http://localhost:4000/api/tickets/predict` | POST | Classifies queue, checks semantic duplicates, and archives ticket |
+| Backend | `http://localhost:4000/api/tickets/duplicates` | POST | Dedicated endpoint to check duplicates against database archive |
 | Backend | `http://localhost:4000/api/tickets` | GET | Retrieves all saved tickets from Supabase (newest first) |
 | ML Service | `http://localhost:8000/health` | GET | ML service status and model loading state |
-| ML Service | `http://localhost:8000/predict` | POST | Direct ML inference endpoint |
+| ML Service | `http://localhost:8000/predict` | POST | Direct ML queue inference endpoint |
+| ML Service | `http://localhost:8000/duplicates` | POST | Semantic duplicate detection using `all-MiniLM-L6-v2` |
 | ML Service Docs | `http://localhost:8000/docs` | GET | Swagger interactive API docs |
 
 ---
@@ -419,7 +521,9 @@ concurrently \
 | Frontend | React 18, Vite 6 |
 | Backend | Node.js 20+, Express 4, ES Modules, `@supabase/supabase-js` |
 | Database | Supabase (PostgreSQL, PostgREST) |
-| ML Service | Python 3.11+, FastAPI, Uvicorn |
+| ML Classification | Python 3.11+, Scikit-Learn (TF-IDF + Logistic Regression) |
+| Semantic Embeddings | Sentence-Transformers (`all-MiniLM-L6-v2`), PyTorch |
+| API Serving | FastAPI, Uvicorn |
 
 ---
 
