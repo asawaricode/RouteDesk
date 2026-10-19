@@ -9,6 +9,7 @@ Provides:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
@@ -22,7 +23,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
-from sentence_transformers import SentenceTransformer, util
 
 load_dotenv()
 
@@ -53,12 +53,50 @@ embedding_state: dict[str, Any] = {
     "error": None,
 }
 
+_embedding_lock: Optional[asyncio.Lock] = None
+
+
+def get_embedding_lock() -> asyncio.Lock:
+    """Returns or lazily creates the asyncio lock to prevent concurrent model loads."""
+    global _embedding_lock
+    if _embedding_lock is None:
+        _embedding_lock = asyncio.Lock()
+    return _embedding_lock
+
+
+async def get_embedding_model():
+    """Lazily load SentenceTransformer model on first duplicate detection call and cache it."""
+    if embedding_state.get("model") is not None:
+        return embedding_state["model"]
+
+    lock = get_embedding_lock()
+    async with lock:
+        # Double-check inside lock
+        if embedding_state.get("model") is not None:
+            return embedding_state["model"]
+
+        print(f"[*] Lazily loading sentence-transformer model: {EMBEDDING_MODEL_NAME}")
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            embed_model = await asyncio.to_thread(SentenceTransformer, EMBEDDING_MODEL_NAME)
+            embedding_state["model"] = embed_model
+            embedding_state["loaded_at"] = datetime.now(timezone.utc).isoformat()
+            embedding_state["error"] = None
+            print(f"[OK] SentenceTransformer '{EMBEDDING_MODEL_NAME}' loaded successfully (lazy)")
+            return embed_model
+        except Exception as exc:
+            print(f"[ERROR] Failed to load SentenceTransformer: {exc}")
+            embedding_state["model"] = None
+            embedding_state["error"] = str(exc)
+            raise exc
+
 
 # ── Lifespan handler ──────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup / shutdown hook — loads classification model and sentence transformer."""
+    """Startup / shutdown hook — loads classification model at startup."""
     # 1. Load classification pipeline
     print(f"[*] Loading classification model from: {MODEL_PATH}")
     try:
@@ -84,19 +122,6 @@ async def lifespan(app: FastAPI):
         print(f"[ERROR] Failed to load classifier model: {exc}")
         model_state["model"] = None
         model_state["error"] = str(exc)
-
-    # 2. Load sentence embedding model for duplicate detection
-    print(f"[*] Loading sentence-transformer model: {EMBEDDING_MODEL_NAME}")
-    try:
-        embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-        embedding_state["model"] = embed_model
-        embedding_state["loaded_at"] = datetime.now(timezone.utc).isoformat()
-        embedding_state["error"] = None
-        print(f"[OK] SentenceTransformer '{EMBEDDING_MODEL_NAME}' loaded successfully")
-    except Exception as exc:
-        print(f"[ERROR] Failed to load SentenceTransformer: {exc}")
-        embedding_state["model"] = None
-        embedding_state["error"] = str(exc)
 
     yield
 
@@ -245,11 +270,14 @@ async def health_check():
     is_embed_loaded = embedding_state.get("model") is not None
     classes = model_state.get("classes", [])
 
+    # Embedding model is ready if already loaded in memory or available for lazy loading without error
+    is_embed_ready = is_embed_loaded or (embedding_state.get("error") is None)
+
     payload: dict[str, Any] = {
-        "status": "ok" if (is_classifier_loaded and is_embed_loaded) else "degraded",
+        "status": "ok" if (is_classifier_loaded and is_embed_ready) else "degraded",
         "service": "routedesk-ml-service",
         "model_loaded": is_classifier_loaded,
-        "embedding_model_loaded": is_embed_loaded,
+        "embedding_model_loaded": is_embed_ready,
         "embedding_model": EMBEDDING_MODEL_NAME,
         "model_path": model_state.get("model_path"),
         "classes_count": len(classes),
@@ -264,10 +292,8 @@ async def health_check():
 
     if is_embed_loaded:
         payload["embedding_loaded_at"] = embedding_state.get("loaded_at")
-    else:
-        payload["embedding_error"] = embedding_state.get(
-            "error", "SentenceTransformer model not loaded"
-        )
+    elif embedding_state.get("error") is not None:
+        payload["embedding_error"] = embedding_state.get("error")
 
     return payload
 
@@ -361,13 +387,6 @@ async def detect_duplicates(request: DuplicateDetectionRequest):
     Computes cosine similarity between incoming ticket vector and candidate vectors.
     Returns ranked most similar tickets with similarity scores.
     """
-    embed_model = embedding_state.get("model")
-    if embed_model is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"SentenceTransformer embedding model is not loaded. Details: {embedding_state.get('error')}",
-        )
-
     # If candidates list is empty (e.g. no prior tickets in DB), return empty results immediately
     if not request.candidates:
         return DuplicateDetectionResponse(
@@ -375,6 +394,14 @@ async def detect_duplicates(request: DuplicateDetectionRequest):
             threshold=request.threshold,
             candidate_count=0,
             duplicates=[],
+        )
+
+    try:
+        embed_model = await get_embedding_model()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"SentenceTransformer embedding model is not loaded. Details: {exc}",
         )
 
     # 1. Format incoming ticket text
@@ -417,6 +444,8 @@ async def detect_duplicates(request: DuplicateDetectionRequest):
         )
 
     try:
+        from sentence_transformers import util
+
         # 3. Compute normalized sentence embeddings
         target_embedding = embed_model.encode(
             incoming_text,
